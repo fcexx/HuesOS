@@ -1,6 +1,8 @@
-org 0x7e00
+bits 32
+section .kernel
+global kernel_entry
 
-start:
+kernel_entry:
     mov si, welcome
     call print
     mov si, console
@@ -251,7 +253,7 @@ disk_drive: db "Hardware:", 10, 13, "  1. Are the disk drives installed: ", 0
 coprocessor: db "  2. Are the coprocessor installed: ", 0
 hardware_yes: db "YES", 0
 hardware_no: db "NO", 0
-help: db "Available Commands:", 10, 13, "  1. ABOUT - displaying information about the system.", 10, 13, "  2. CLS - clear the screen.", 10, 13,  "  3. HARDWARE - hardware display.", 10, 13, "  4. HELP - displaying available commands.", 10, 13, "  5. MEM - launches the memory app.", 10, 13, "  6. REBOOT - reboot the computer.", 10, 13, "  7. TIME - launches the watch app.", 10, 13, 0
+help: db "Available Commands:", 10, 13, "  1. ABOUT - displaying information about the system.", 10, 13, "  2. CLS - clear the screen.", 10, 13,  "  3. HARDWARE - hardware display.", 10, 13, "  4. HELP - displaying available commands.", 10, 13, "  5. MEM - launches the memory app.", 10,13, "  6. REBOOT - reboot the computer.", 10, 13, "  7. TIME - launches the watch app.", 10, 13, 0
 error: db "Unknown command!", 10, 13, 0
 command: db ""
 

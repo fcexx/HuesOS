@@ -1,6 +1,7 @@
 #include <stdarg.h>
 #include <stdint.h>
 #include <serial.h>
+#include <debug.h>
 
 #define QEMU_DEBUG_PORT 0x3f8
 

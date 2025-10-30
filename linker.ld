@@ -1,25 +1,27 @@
-OUTPUT_FORMAT("elf32-i386")
-ENTRY(_kernel_main)
+OUTPUT_FORMAT("elf64-x86-64")
+ENTRY(_start)
 
 SECTIONS
 {
-    . = 0x00100000;
-
-    .text :
-    {
-        *(.multiboot)
-        *(.text*)
-    }
-
-    .rodata : { *(.rodata*) }
-
-    .data :
-    {
-        *(.data*)
-        *(.bss*)
-    }
-
-    .bss : { *(.bss) }
-
-    /DISCARD/ : { *(.eh_frame) }
-}
+        . = 0x100000;
+        
+                                        .multiboot2 : {
+                                        *(.multiboot2)
+                                }
+        
+        .text : {
+                *(.text)
+        }
+        
+        .rodata : {
+                *(.rodata)
+        }
+        
+        .data : {
+                *(.data)
+        }
+        
+        .bss : {
+                *(.bss)
+        }
+} 

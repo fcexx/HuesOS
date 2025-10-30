@@ -1,184 +1,181 @@
-#include <stdint.h>
-#include <string.h>
-#include <vga.h>
-#include <serial.h>
 #include <idt.h>
+#include <vga.h>
+#include <pic.h>
+//#include <pit.h>
+#include <stdint.h>
+//#include <thread.h>
+#include <stdint.h>
+#include <stddef.h>
+#include <debug.h>
+// Avoid including <cstdint> because cross-toolchain headers may not provide it; use uint64_t instead
 
-struct idt_entry_struct idt_entries[256];
-struct idt_ptr_struct idt_ptr;
+// Forward declare C-linkage helpers from other compilation units
+uint64_t dbg_saved_rbx_in;
+uint64_t dbg_saved_rbx_out;
 
-extern void idt_flush(uint32_t);
+// локальные таблицы обработчиков (неиспользуемые предупреждения устраним использованием ниже)
+static void (*irq_handlers[16])() = {NULL};
+static void (*isr_handlers[256])(cpu_registers_t*) = {NULL};
 
-void init_idt(){
-    idt_ptr.limit = sizeof(struct idt_entry_struct) * 256 - 1;
-    idt_ptr.base = (uint32_t) &idt_entries;
-
-    memset(&idt_entries, 0, sizeof(struct idt_entry_struct) * 256);
-
-    //0x20 commands and 0x21 data
-    //0xA0 commands and 0xA1 data
-    outb(0x20, 0x11);
-    outb(0xA0, 0x11);
-
-    outb(0x21, 0x20);
-    outb(0xA1, 0x28);
-
-    outb(0x21,0x04);
-    outb(0xA1,0x02);
-
-    outb(0x21, 0x01);
-    outb(0xA1, 0x01);
-
-    outb(0x21, 0x0);
-    outb(0xA1, 0x0);
-
-    set_idt_gate(0, (uint32_t)isr0,0x08, 0x8E);
-    set_idt_gate(1, (uint32_t)isr1,0x08, 0x8E);
-    set_idt_gate(2, (uint32_t)isr2,0x08, 0x8E);
-    set_idt_gate(3, (uint32_t)isr3,0x08, 0x8E);
-    set_idt_gate(4, (uint32_t)isr4, 0x08, 0x8E);
-    set_idt_gate(5, (uint32_t)isr5, 0x08, 0x8E);
-    set_idt_gate(6, (uint32_t)isr6, 0x08, 0x8E);
-    set_idt_gate(7, (uint32_t)isr7, 0x08, 0x8E);
-    set_idt_gate(8, (uint32_t)isr8, 0x08, 0x8E);
-    set_idt_gate(9, (uint32_t)isr9, 0x08, 0x8E);
-    set_idt_gate(10, (uint32_t)isr10, 0x08, 0x8E);
-    set_idt_gate(11, (uint32_t)isr11, 0x08, 0x8E);
-    set_idt_gate(12, (uint32_t)isr12, 0x08, 0x8E);
-    set_idt_gate(13, (uint32_t)isr13, 0x08, 0x8E);
-    set_idt_gate(14, (uint32_t)isr14, 0x08, 0x8E);
-    set_idt_gate(15, (uint32_t)isr15, 0x08, 0x8E);
-    set_idt_gate(16, (uint32_t)isr16, 0x08, 0x8E);
-    set_idt_gate(17, (uint32_t)isr17, 0x08, 0x8E);
-    set_idt_gate(18, (uint32_t)isr18, 0x08, 0x8E);
-    set_idt_gate(19, (uint32_t)isr19, 0x08, 0x8E);
-    set_idt_gate(20, (uint32_t)isr20, 0x08, 0x8E);
-    set_idt_gate(21, (uint32_t)isr21, 0x08, 0x8E);
-    set_idt_gate(22, (uint32_t)isr22, 0x08, 0x8E);
-    set_idt_gate(23, (uint32_t)isr23, 0x08, 0x8E);
-    set_idt_gate(24, (uint32_t)isr24, 0x08, 0x8E);
-    set_idt_gate(25, (uint32_t)isr25, 0x08, 0x8E);
-    set_idt_gate(26, (uint32_t)isr26, 0x08, 0x8E);
-    set_idt_gate(27, (uint32_t)isr27, 0x08, 0x8E);
-    set_idt_gate(28, (uint32_t)isr28, 0x08, 0x8E);
-    set_idt_gate(29, (uint32_t)isr29, 0x08, 0x8E);
-    set_idt_gate(30, (uint32_t)isr30, 0x08, 0x8E);
-    set_idt_gate(31, (uint32_t)isr31, 0x08, 0x8E);
-
-    set_idt_gate(32, (uint32_t)irq0, 0x08, 0x8E);
-    set_idt_gate(33, (uint32_t)irq1, 0x08, 0x8E);
-    set_idt_gate(34, (uint32_t)irq2, 0x08, 0x8E);
-    set_idt_gate(35, (uint32_t)irq3, 0x08, 0x8E);
-    set_idt_gate(36, (uint32_t)irq4, 0x08, 0x8E);
-    set_idt_gate(37, (uint32_t)irq5, 0x08, 0x8E);
-    set_idt_gate(38, (uint32_t)irq6, 0x08, 0x8E);
-    set_idt_gate(39, (uint32_t)irq7, 0x08, 0x8E);
-    set_idt_gate(40, (uint32_t)irq8, 0x08, 0x8E);
-    set_idt_gate(41, (uint32_t)irq9, 0x08, 0x8E);
-    set_idt_gate(42, (uint32_t)irq10, 0x08, 0x8E);
-    set_idt_gate(43, (uint32_t)irq11, 0x08, 0x8E);
-    set_idt_gate(44, (uint32_t)irq12, 0x08, 0x8E);
-    set_idt_gate(45, (uint32_t)irq13, 0x08, 0x8E);
-    set_idt_gate(46, (uint32_t)irq14, 0x08, 0x8E);
-    set_idt_gate(47, (uint32_t)irq15, 0x08, 0x8E);
-
-
-    set_idt_gate(128, (uint32_t)isr128, 0x08, 0x8E); //System calls
-    set_idt_gate(177, (uint32_t)isr177, 0x08, 0x8E); //System calls
-
-    idt_flush((uint32_t)&idt_ptr);
-
-}
-
-void set_idt_gate(uint8_t num, uint32_t base, uint16_t sel, uint8_t flags){
-
-    idt_entries[num].base_low = base & 0xFFFF;
-    idt_entries[num].base_high = (base >> 16) & 0xFFFF;
-    idt_entries[num].sel = sel;
-    idt_entries[num].always0 = 0;
-    idt_entries[num].flags = flags | 0x60;
-
-}
-
-char* exception_messages[] = {
-    "Division By Zero",
-    "Debug",
-    "Non Maskable Interrupt",
-    "Breakpoint",
-    "Into Detected Overflow",
-    "Out of Bounds",
-    "Invalid Opcode",
-    "No Coprocessor",
-    "Double fault",
-    "Coprocessor Segment Overrun",
-    "Bad TSS",
-    "Segment not present",
-    "Stack fault",
-    "General protection fault",
-    "Page fault",
-    "Unknown Interrupt",
-    "Coprocessor Fault",
-    "Alignment Fault",
-    "Machine Check", 
-    "Reserved",
-    "Reserved",
-    "Reserved",
-    "Reserved",
-    "Reserved",
-    "Reserved",
-    "Reserved",
-    "Reserved",
-    "Reserved",
-    "Reserved",
-    "Reserved",
-    "Reserved",
-    "Reserved"
+static struct idt_entry_t idt[256];
+static struct idt_ptr_t idt_ptr;
+// сообщения об исключениях — определение для внешней декларации из idt.h
+const char* exception_messages[] = {
+        "Division By Zero","Debug","Non Maskable Interrupt","Breakpoint","Into Detected Overflow",
+        "Out of Bounds","Invalid Opcode","No Coprocessor","Double fault","Coprocessor Segment Overrun",
+        "Bad TSS","Segment not present","Stack fault","General protection fault","Page fault",
+        "Unknown Interrupt","Coprocessor Fault","Alignment Fault","Machine Check",
+        "Reserved","Reserved","Reserved","Reserved","Reserved","Reserved","Reserved","Reserved",
+        "Reserved","Reserved","Reserved","Reserved","Reserved"
 };
 
-void isr_handler(struct interrupt_regs* regs){
-    if (regs->int_no < 32) {
-        asm("cli");
-        // First, print the exception vector number
-        kprint("Exception: "); 
-        kprint(exception_messages[regs->int_no]); 
-        kprint("\n");
+static inline void read_crs(uint64_t* cr0, uint64_t* cr2, uint64_t* cr3, uint64_t* cr4){
+        uint64_t t0=0,t2=0,t3=0,t4=0; (void)t0; (void)t2; (void)t3; (void)t4;
+        asm volatile("mov %%cr0, %0" : "=r"(t0));
+        asm volatile("mov %%cr2, %0" : "=r"(t2));
+        asm volatile("mov %%cr3, %0" : "=r"(t3));
+        asm volatile("mov %%cr4, %0" : "=r"(t4));
+        if (cr0) *cr0 = t0; if (cr2) *cr2 = t2; if (cr3) *cr3 = t3; if (cr4) *cr4 = t4;
+}
+
+static void dump(const char* what, const char* who, cpu_registers_t* regs, uint64_t cr2, uint64_t err, bool user_mode){
+        (void)what;
+        (void)who;
+        (void)regs;
+        (void)cr2;
+        (void)err;
+        (void)user_mode;
+}
+
+static void ud_fault_handler(cpu_registers_t* regs) {
+        // Invalid Opcode (#UD). В ring3 не эмулируем — завершаем поток.
+        if ((regs->cs & 3) == 3) {
+                dump("invalid opcode", "user", regs, 0, 0, true);
+                for(;;){ asm volatile("sti; hlt" ::: "memory"); }
+        }
+        // Иначе — ядро: печатаем и стоп
+        dump("invalid opcode", "kernel", regs, 0, 0, false);
+        for(;;){ asm volatile("sti; hlt":::"memory"); }
+}
+
+// Handle Divide-by-zero (INT 0). For user faults: kill process and return to idle;
+// for kernel faults: print diagnostics and halt.
+static void div_zero_handler(cpu_registers_t* regs) {
+        qemu_debug_printf("[div0] divide by zero at RIP=0x%llx err=0x%llx\n", (unsigned long long)regs->rip, (unsigned long long)regs->error_code);
+        // If fault originated from user mode, terminate the user process safely
+        if ((regs->cs & 3) == 3) {
+                dump("divide by zero", "user", regs, 0, regs->error_code, true);
+                // leave CPU in idle loop to avoid returning into faulty user code
+                for(;;){ asm volatile("sti; hlt" ::: "memory"); }
+        }
+        // Kernel fault: print and halt
+        dump("divide by zero", "kernel", regs, 0, regs->error_code, false);
+        for(;;){ asm volatile("sti; hlt" ::: "memory"); }
+}
+
+static void page_fault_handler(cpu_registers_t* regs) {
+        kprint("PAGE FAULT\n");
+        (void)regs;
+        for (;;) { asm volatile("sti; hlt" ::: "memory"); }
+}
+
+static void gp_fault_handler(cpu_registers_t* regs){
+    // Никакого рендера/свапа из обработчика GP
+        // Строгая семантика для POSIX-подобного поведения: никаких эмуляций в ring3.
+        // General Protection Fault в пользовательском процессе рассматривается как фатальная ошибка процесса.
+        if ((regs->cs & 3) == 3) {
+                kprint("USER GENERAL PROTECTION FAULT\n");
+                asm volatile("sti; hlt" ::: "memory");
+                (void)regs;
+        }
+        // kernel GP — стоп, но оставляем PIT активным для мигания курсора
+        (void)regs;
+        for(;;){ asm volatile("sti; hlt" ::: "memory"); }
+}
+
+static void df_fault_handler(cpu_registers_t* regs){
+        // Double Fault (#DF) — используем отдельный IST стек, чтобы избежать triple fault
+        kprint("DOUBLE FAULT\n");
+        // Застываем в безопасной петле с включёнными прерываниями
+        for(;;){ asm volatile("sti; hlt" ::: "memory"); }
+}
+
+void isr_dispatch(cpu_registers_t* regs) {
+        uint8_t vec = (uint8_t)regs->interrupt_number;
+
+        // Если пришёл IRQ1 (клавиатура) — гарантируем EOI даже при отсутствии обработчика
+        if (vec == 33) {
+                if (isr_handlers[vec]) {
+                        isr_handlers[vec](regs);
+                }
+                pic_send_eoi(1);
+                return;
+        }
+
+        // IRQ 32..47: EOI required
+        if (vec >= 32 && vec <= 47) {
+                if (isr_handlers[vec]) {
+                        isr_handlers[vec](regs);
+                } else {
+                        qemu_debug_printf("Unhandled IRQ %d\n", vec - 32);
+                }
+                pic_send_eoi(vec - 32);
+                return;
+                }
+                
+        // Any other vector: call registered handler if present (e.g., int 0x80)
+        if (isr_handlers[vec]) {
+                isr_handlers[vec](regs);
+                return;
+        }
+        
+        // Exceptions 0..31 without specific handler: print and halt
+        if (vec < 32) {
+                for (;;);
+        }
+        
+        // Unknown vector
+        qemu_debug_printf("Unknown interrupt %d (0x%x)\n", vec, vec);
+        qemu_debug_printf("RIP: 0x%x, RSP: 0x%x\n", regs->rip, regs->rsp);
         for (;;);
-    }
-    if (regs->int_no == 14){
-        kprint("Page fault\n");
+        // no swap in VGA text mode
         for (;;);
-    }
-    if (regs->int_no == 128) {
-        //syscall_handler(regs);
-        return;
-    }
 }
 
-void *irq_routines[16] = {
-    0,0,0,0,0,0,0,0,
-    0,0,0,0,0,0,0,0
-};
-
-void irq_install_handler (int irq, void (*handler)(struct interrupt_regs *r)){
-    irq_routines[irq] = handler;
+void idt_set_gate(uint8_t num, uint64_t handler, uint16_t selector, uint8_t flags) {
+        idt[num].offset_low = handler & 0xFFFF;
+        idt[num].offset_mid = (handler >> 16) & 0xFFFF;
+        idt[num].offset_high = (handler >> 32) & 0xFFFFFFFF;
+        idt[num].selector = selector;
+        idt[num].ist = 0;
+        idt[num].flags = flags;
+        idt[num].reserved = 0;
 }
 
-void irq_uninstall_handler(int irq){
-    irq_routines[irq] = 0;
+void idt_set_handler(uint8_t num, void (*handler)(cpu_registers_t*)) {
+        isr_handlers[num] = handler;
 }
 
-void irq_handler(struct interrupt_regs* regs){
-    void (*handler)(struct interrupt_regs *regs);
-
-    handler = irq_routines[regs->int_no - 32];
-
-    if (handler){
-        handler(regs);
-    }
-
-    if (regs->int_no >= 40){
-        outb(0xA0, 0x20);
-    }
-
-    outb(0x20,0x20);
+void idt_init() {
+        idt_ptr.limit = sizeof(idt) - 1;
+        idt_ptr.base = (uint64_t)&idt;
+        
+        for (int i = 0; i < 256; i++) {
+                idt_set_gate(i, isr_stub_table[i], 0x08, 0x8E);
+        }
+        
+        // Register detailed page fault handler
+        idt_set_handler(14, page_fault_handler);
+        // Register divide-by-zero handler (#0)
+        idt_set_handler(0, div_zero_handler);
+        // Register UD handler (#6)
+        idt_set_handler(6, ud_fault_handler);
+        // Register GP fault handler (#13)
+        idt_set_handler(13, gp_fault_handler);
+        // Register DF handler (#8) and put it on IST1
+        idt_set_handler(8, df_fault_handler);
+        // Пометим IST=1 у вектора 8
+        idt[8].ist = 1;
+        
+        asm volatile("lidt %0" : : "m"(idt_ptr));
 }

@@ -2,6 +2,8 @@
 #include <serial.h>
 #include <vga.h>
 #include <string.h>
+#include <stdarg.h>
+#include <stddef.h>
 
 void	kprint(uint8_t *str)
 {
@@ -226,131 +228,187 @@ void ftos(double n, char *buf, int precision) {
     buf[i] = '\0';
 }
 
-void kprintf(const char* format, ...) {
-    char c;
-    uint8_t current_color = 0x0f; // По умолчанию светло-серый текст на черном фоне
-    char **arg = (char **) &format;
-    int *int_arg;
-    char *str_arg;
-    char num_buf[32];
-    unsigned int uint_arg;
-    double double_arg;
+static void kputn(char ch, int count, uint8_t color)
+{
+	for (int i = 0; i < count; i++) kputchar(ch, color);
+}
 
-    arg++; // Переходим к первому аргументу после format
+static int utoa_rev(unsigned long long v, unsigned base, int upper, char *out)
+{
+	const char *digits = upper ? "0123456789ABCDEF" : "0123456789abcdef";
+	int n = 0;
+	if (v == 0) { out[n++] = '0'; return n; }
+	while (v) { out[n++] = digits[v % base]; v /= base; }
+	return n;
+}
 
-    while ((c = *format++) != 0) {
-        if (c == '<' && *format == '(') {
-            format++; // Пропускаем '('
+void kprintf(const char* fmt, ...)
+{
+	va_list ap;
+	va_start(ap, fmt);
 
-            // Читаем два символа цветового кода
-            char bg_color = *format++;
-            char fg_color = *format++;
+	uint8_t color = 0x07; // светло-серый на чёрном
+	for (const char *p = fmt; *p; ) {
+		// inline цветовой код <(bgfg)>
+		if (*p == '<' && p[1] == '(' && p[4] && p[5] == ')' && p[6] == '>') {
+			color = parse_color_code(p[2], p[3]);
+			p += 7;
+			continue;
+		}
 
-            if (*format == ')' && *(format + 1) == '>') {
-                current_color = parse_color_code(bg_color, fg_color);
-                format += 2; // Пропускаем ')>'
-                continue;
-            }
-        }
+		if (*p != '%') { kputchar(*p++, color); continue; }
+ 		p++;
+		// flags
+ 		int left = 0, plus = 0, space = 0, alt = 0, zero = 0;
+ 		for (;;){
+ 			if (*p == '-') { left = 1; p++; }
+ 			else if (*p == '+') { plus = 1; p++; }
+ 			else if (*p == ' ') { space = 1; p++; }
+ 			else if (*p == '#') { alt = 1; p++; }
+ 			else if (*p == '0') { zero = 1; p++; }
+ 			else break;
+ 		}
+ 		// width
+ 		int width = 0;
+ 		if (*p == '*') { width = va_arg(ap, int); p++; }
+ 		else while (*p >= '0' && *p <= '9') { width = width*10 + (*p++ - '0'); }
+ 		// precision
+ 		int prec = -1;
+ 		if (*p == '.') {
+ 			p++;
+ 			if (*p == '*') { prec = va_arg(ap, int); p++; }
+ 			else { prec = 0; while (*p >= '0' && *p <= '9') prec = prec*10 + (*p++ - '0'); }
+ 		}
+ 		// совместимость с нестандартным %10-4x (ширина-точность)
+ 		if (prec < 0 && *p == '-') {
+ 			p++;
+ 			prec = 0; while (*p >= '0' && *p <= '9') prec = prec*10 + (*p++ - '0');
+ 		}
+ 		// length (минимальный набор)
+ 		enum { LEN_DEF, LEN_HH, LEN_H, LEN_L, LEN_LL, LEN_Z } len = LEN_DEF;
+ 		if (*p == 'h') { p++; if (*p == 'h') { len = LEN_HH; p++; } else len = LEN_H; }
+ 		else if (*p == 'l') { p++; if (*p == 'l') { len = LEN_LL; p++; } else len = LEN_L; }
+ 		else if (*p == 'z') { len = LEN_Z; p++; }
 
-        if (c != '%') {
-            kputchar(c, current_color);
-            continue;
-        }
+ 		char spec = *p ? *p++ : '\0';
+ 		char tmp[64];
+ 		int tmplen = 0;
+ 		int negative = 0;
+ 		char signch = 0;
 
-        c = *format++;
-        int width = 0; // Инициализируем ширину
-        int precision = -1; // По умолчанию precision не задан
+ 		switch (spec) {
+ 		case 'c': {
+ 			int ch = va_arg(ap, int);
+ 			int pad = (width > 1) ? width - 1 : 0;
+ 			if (!left) kputn(' ', pad, color);
+ 			kputchar((char)ch, color);
+ 			if (left) kputn(' ', pad, color);
+ 			break; }
 
-        // Обработка ширины
-        while (c >= '0' && c <= '9') {
-            width = width * 10 + (c - '0'); // Собираем число
-            c = *format++;
-        }
-        // Обработка precision
-        if (c == '.') {
-            c = *format++;
-            precision = 0;
-            while (c >= '0' && c <= '9') {
-                precision = precision * 10 + (c - '0');
-                c = *format++;
-            }
-        }
+ 		case 's': {
+ 			const char *s = va_arg(ap, const char*);
+ 			if (!s) s = "(null)";
+ 			int slen = 0; while (s[slen]) slen++;
+ 			if (prec >= 0 && prec < slen) slen = prec;
+ 			int pad = (width > slen) ? width - slen : 0;
+ 			if (!left) kputn(' ', pad, color);
+ 			for (int i = 0; i < slen; i++) kputchar(s[i], color);
+ 			if (left) kputn(' ', pad, color);
+ 			break; }
 
-        switch (c) {
-            case 'd':
-                int_arg = (int *)arg++;
-                intToString(*int_arg, num_buf);
-                for (char *ptr = num_buf; *ptr; ptr++) {
-                    kputchar(*ptr, current_color);
-                }
-                break;
+ 		case 'd': case 'i': {
+ 			long long v;
+ 			if (len == LEN_LL) v = va_arg(ap, long long);
+ 			else if (len == LEN_L) v = va_arg(ap, long);
+ 			else v = va_arg(ap, int);
+ 			unsigned long long u = (v < 0) ? (unsigned long long)(-v) : (unsigned long long)v;
+ 			negative = (v < 0);
+ 			tmplen = utoa_rev(u, 10, 0, tmp);
+ 			signch = negative ? '-' : (plus ? '+' : (space ? ' ' : 0));
+ 			goto PRINT_NUMBER_BASE10;
+ 		}
 
-            case 'u':
-                uint_arg = *(unsigned int *)arg++;
-                intToString(uint_arg, num_buf);
-                for (char *ptr = num_buf; *ptr; ptr++) {
-                    kputchar(*ptr, current_color);
-                }
-                break;
+ 		case 'u': case 'x': case 'X': case 'o': case 'p': {
+ 			unsigned base = 10; int upper = 0;
+ 			unsigned long long u;
+ 			if (spec == 'p') { u = (unsigned long long)(uintptr_t)va_arg(ap, void*); base = 16; alt = 1; }
+ 			else {
+ 				if (len == LEN_LL) u = va_arg(ap, unsigned long long);
+ 				else if (len == LEN_L) u = va_arg(ap, unsigned long);
+ 				else if (len == LEN_Z) u = va_arg(ap, size_t);
+ 				else u = va_arg(ap, unsigned int);
+ 				if (spec == 'x' || spec == 'X') { base = 16; upper = (spec == 'X'); }
+ 				else if (spec == 'o') { base = 8; }
+ 			}
+ 			tmplen = utoa_rev(u, base, upper, tmp);
+ 			signch = 0;
 
-            case 'x': {
-                int_arg = (int *)arg++;
-                hex_to_str(*int_arg, num_buf);
-                int len = strlen(num_buf);
-                // Добавляем пробелы для выравнивания
-                for (int i = 0; i < width - len; i++) {
-                    kputchar('0', current_color); // Заполняем нулями
-                }
-                for (char *ptr = num_buf; *ptr; ptr++) {
-                    kputchar(*ptr, current_color);
-                }
-                break;
-            }
+ 			// точность для целых
+ 			int num_digits = tmplen;
+ 			int prec_zeros = 0;
+ 			if (prec >= 0) {
+ 				zero = 0; // при точности флаг 0 игнорируется
+ 				if (prec > num_digits) prec_zeros = prec - num_digits;
+ 			}
 
-            case 'X': {
-                int_arg = (int *)arg++;
-                hex_to_str(*int_arg, num_buf);
-                int len = strlen(num_buf);
-                // Добавляем пробелы для выравнивания
-                for (int i = 0; i < width - len; i++) {
-                    kputchar('0', current_color); // Заполняем нулями
-                }
-                for (char *ptr = num_buf; *ptr; ptr++) {
-                    kputchar(*ptr, current_color);
-                }
-                break;
-            }
+ 			// префиксы
+ 			char prefix[2]; int plen = 0;
+ 			if (alt && base == 16 && u != 0) { prefix[0] = '0'; prefix[1] = (upper ? 'X' : 'x'); plen = 2; }
+ 			else if (alt && base == 8 && (u != 0 || prec == 0)) { prefix[0] = '0'; plen = 1; }
 
-            case 'c':
-                int_arg = (int *)arg++;
-                kputchar((char)(*int_arg), current_color);
-                break;
+ 			int field_len = plen + prec_zeros + num_digits;
+ 			int pad = (width > field_len) ? width - field_len : 0;
+ 			char padch = (zero && !left) ? '0' : ' ';
 
-            case 's': {
-                str_arg = *(char **)arg++;
-                int slen = strlen(str_arg);
-                int to_print = slen;
-                if (precision >= 0 && precision < slen) to_print = precision;
-                for (int i = 0; i < to_print; i++) {
-                    kputchar(str_arg[i], current_color);
-                }
-                break;
-            }
+ 			if (!left && padch == ' ') kputn(' ', pad, color);
+ 			// вывод префикса/нулями заполнение
+ 			if (!left && padch == '0') kputn('0', pad, color);
+ 			if (plen) { for (int i = 0; i < plen; i++) kputchar(prefix[i], color); }
+ 			kputn('0', prec_zeros, color);
+ 			for (int i = num_digits - 1; i >= 0; i--) kputchar(tmp[i], color);
+ 			if (left) kputn(' ', pad, color);
+ 			break; }
 
-            case 'f': {
-                double_arg = *(double *)arg++;
-                char float_buf[32];
-                ftos(double_arg, float_buf, 2); // Вывод с двумя знаками после запятой
-                for (char *ptr = float_buf; *ptr; ptr++) {
-                    kputchar(*ptr, current_color);
-                }
-                break;
-            }
+ 		case '%':
+ 			kputchar('%', color);
+ 			break;
 
-            default:
-                kputchar(c, current_color);
-                break;
-        }
-    }
+ 		default:
+ 			kputchar(spec, color);
+ 			break;
+
+PRINT_NUMBER_BASE10:
+ 		{
+ 			int num_digits = tmplen;
+ 			int prec_zeros = 0;
+ 			if (prec >= 0) { zero = 0; if (prec > num_digits) prec_zeros = prec - num_digits; }
+ 			int sign_len = signch ? 1 : 0;
+ 			int field_len = sign_len + prec_zeros + num_digits;
+ 			int pad = (width > field_len) ? width - field_len : 0;
+ 			char padch = (zero && !left) ? '0' : ' ';
+ 			if (!left && padch == ' ' ) kputn(' ', pad, color);
+ 			if (signch) kputchar(signch, color);
+ 			if (!left && padch == '0') kputn('0', pad, color);
+ 			kputn('0', prec_zeros, color);
+ 			for (int i = num_digits - 1; i >= 0; i--) kputchar(tmp[i], color);
+ 			if (left) kputn(' ', pad, color);
+ 			break;
+ 		}
+ 		}
+ 	}
+
+	va_end(ap);
+}
+
+void vga_set_cursor(uint32_t x, uint32_t y)
+{
+    set_cursor_x(x);
+    set_cursor_y(y);
+}
+
+void vga_get_cursor(uint32_t* x, uint32_t* y)
+{
+    uint16_t pos = get_cursor();
+    if (x) *x = (pos % (MAX_COLS * 2)) / 2;
+    if (y) *y = pos / (MAX_COLS * 2);
 }

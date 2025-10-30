@@ -21,3 +21,5 @@ uint16_t get_cursor_x();
 uint16_t get_cursor_y();
 void set_cursor_x(uint16_t x);
 void set_cursor_y(uint16_t y);
+void vga_set_cursor(uint32_t x, uint32_t y);
+void vga_get_cursor(uint32_t* x, uint32_t* y);

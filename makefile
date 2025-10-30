@@ -17,16 +17,16 @@ MULTIBOOT_BIN := $(BUILD_DIR)/multiboot.bin
 ISO_IMAGE := $(BUILD_DIR)/huesos.iso
 
 CC := gcc
-CFLAGS := -m32 -ffreestanding -O2 -nostdlib -fno-builtin -fno-stack-protector -Iinc
+CFLAGS := -m32 -ffreestanding -O2 -nostdlib -fno-builtin -fno-stack-protector -Iinc -w
 
-CSRCS := $(shell find . -type f -name '*.c' -print | sed 's|^\./||')
-COBJS := $(patsubst %.c,$(BUILD_DIR)/%.o,$(CSRCS))
+CSRCS := $(shell find . -path './build' -prune -o -path './iso' -prune -o -type f -name '*.c' -print | sed 's|^\./||')
+COBJS := $(patsubst %.c,$(BUILD_DIR)/%.c.o,$(CSRCS))
 
-ASMSRCS := $(shell find . -type f -name '*.asm' -print | sed 's|^\./||')
-ASMOBJS := $(patsubst %.asm,$(BUILD_DIR)/%.o,$(ASMSRCS))
+ASMSRCS := $(shell find . -path './build' -prune -o -path './iso' -prune -o -type f -name '*.asm' -print | sed 's|^\./||')
+ASMOBJS := $(patsubst %.asm,$(BUILD_DIR)/%.asm.o,$(ASMSRCS))
 
-MULTIBOOT_SRC := $(shell find . -type f -name 'multiboot.asm' -print | sed 's|^\./||')
-MULTIBOOT_OBJ := $(if $(MULTIBOOT_SRC),$(BUILD_DIR)/$(MULTIBOOT_SRC:.asm=.o),)
+MULTIBOOT_SRC := $(shell find . -path './build' -prune -o -path './iso' -prune -o -type f -name 'multiboot.asm' -print | sed 's|^\./||')
+MULTIBOOT_OBJ := $(if $(MULTIBOOT_SRC),$(BUILD_DIR)/$(MULTIBOOT_SRC:.asm=.asm.o),)
 OTHER_ASM_OBJS := $(filter-out $(MULTIBOOT_OBJ),$(ASMOBJS))
 
 .PHONY: all kernel iso clean run
@@ -35,13 +35,13 @@ all: iso
 
 kernel: $(KERNEL_BIN)
 
-$(BUILD_DIR)/%.o: %.asm
+$(BUILD_DIR)/%.asm.o: %.asm
 	@mkdir -p $(dir $@)
 	@$(ASM) $(ASM_ELF_FLAGS) -o $@ $<
 
-$(BUILD_DIR)/%.o: %.c
+$(BUILD_DIR)/%.c.o: %.c
 	@mkdir -p $(dir $@)
-	@$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) -c -o $@ $<
 
 $(KERNEL_ELF): $(MULTIBOOT_OBJ) $(OTHER_ASM_OBJS) $(COBJS)
 	@mkdir -p $(BUILD_DIR)
@@ -57,9 +57,7 @@ $(GRUB_DIR):
 	@mkdir -p $(GRUB_DIR)
 
 
-$(BUILD_DIR)/%.o: %.c
-	@mkdir -p $(dir $@)
-	@$(CC) $(CFLAGS) -c -o $@ $<
+
 
 iso: $(KERNEL_ELF) $(GRUB_DIR)/grub.cfg
 	@cp $(KERNEL_ELF) $(ISO_BOOT)/huesos.elf

@@ -1,12 +1,15 @@
-void kernel_main(void) {
-    print_string("Welcome to HuesOS! it works");
-    for(;;);
-}
+#include <huesos.h>
+#include <stdint.h>
+#include <gdt.h>
+#include <vga.h>
+#include <idt.h>
 
-void print_string(char *str) {
-    unsigned char *video_memory = (unsigned char *)0xb8000;
-    for(int i = 0; str[i] != '\0'; i++) {
-        video_memory[i * 2] = str[i];
-        video_memory[i * 2 + 1] = 0x07;
-    }
+void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {
+    kprint("Initializing HuesOS kernel...\n");
+    kprint("Initializing GDT...\n");
+    init_gdt();
+    kprint("Initializing IDT...\n");
+    init_idt();
+    kprint("\nOperating System done; endless cycle");
+    for(;;);
 }

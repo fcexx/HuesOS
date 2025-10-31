@@ -1,4 +1,5 @@
 #include <string.h>
+#include <heap.h>
 
 // Вычисляет длину строки
 size_t strlen(const char* str) {
@@ -401,4 +402,51 @@ size_t strnlen(const char* s, size_t maxlen) {
                 i++;
         }
         return i;
+}
+
+static int is_delim(char c, const char* delim) {
+        for (const char* d = delim; *d; ++d) if (c == *d) return 1;
+        return 0;
+}
+
+char** split(const char* str, char* delim, int* n) {
+        if (!str || !delim) {
+                char** empty = (char**)kmalloc(sizeof(char*));
+                if (empty) empty[0] = NULL;
+                if (n) *n = 0;
+                return empty;
+        }
+
+        // First pass: count tokens
+        size_t count = 0;
+        const char* p = str;
+        while (*p) {
+                while (*p && is_delim(*p, delim)) p++;
+                if (!*p) break;
+                count++;
+                while (*p && !is_delim(*p, delim)) p++;
+        }
+
+        // Allocate array (NULL-terminated)
+        char** out = (char**)kmalloc((count + 1) * sizeof(char*));
+        if (!out) return NULL;
+        out[count] = NULL;
+        if (n) *n = (int)count;
+
+        // Second pass: copy tokens
+        p = str;
+        size_t idx = 0;
+        while (*p) {
+                while (*p && is_delim(*p, delim)) p++;
+                if (!*p) break;
+                const char* start = p;
+                while (*p && !is_delim(*p, delim)) p++;
+                size_t len = (size_t)(p - start);
+                char* token = (char*)kmalloc(len + 1);
+                if (!token) { out[idx] = NULL; return out; }
+                for (size_t i = 0; i < len; i++) token[i] = start[i];
+                token[len] = '\0';
+                out[idx++] = token;
+        }
+        return out;
 }

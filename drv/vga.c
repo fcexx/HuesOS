@@ -5,6 +5,8 @@
 #include <stdarg.h>
 #include <stddef.h>
 
+static uint8_t parse_color_code(char bg, char fg);
+
 void	kprint(uint8_t *str)
 {
 	while (*str)
@@ -40,6 +42,20 @@ void	kputchar(uint8_t character, uint8_t attribute_byte)
 	}
 }
 
+void kprint_colorized(const char* str)
+{
+    uint8_t color = 0x07;
+    const char* p = str;
+    while (*p) {
+        if (*p == '<' && p[1] == '(' && p[2] && p[3] && p[4] == ')' && p[5] == '>') {
+            color = parse_color_code(p[2], p[3]);
+            p += 6;
+            continue;
+        }
+        kputchar(*p++, color);
+    }
+}
+
 void	scroll_line()
 {
 	uint8_t i = 1;
@@ -71,6 +87,17 @@ void	kclear()
 	while (offset < (MAX_ROWS * MAX_COLS * 2))
 	{
 		write('\0', WHITE_ON_BLACK, offset);
+		offset += 2;
+	}
+	set_cursor(0);
+}
+
+void kclear_col(uint8_t attribute_byte)
+{
+	uint16_t offset = 0;
+	while (offset < (MAX_ROWS * MAX_COLS * 2))
+	{
+		write('\0', attribute_byte, offset);
 		offset += 2;
 	}
 	set_cursor(0);
@@ -161,8 +188,7 @@ void hex_to_str(uint32_t num, char *str) {
     }
 }
 
-uint8_t parse_color_code(char bg, char fg);
-uint8_t parse_color_code(char bg, char fg) {
+static uint8_t parse_color_code(char bg, char fg) {
     uint8_t background = 0;
     uint8_t foreground = 0;
     
@@ -247,14 +273,14 @@ void kprintf(const char* fmt, ...)
 	va_list ap;
 	va_start(ap, fmt);
 
-	uint8_t color = 0x07; // светло-серый на чёрном
-	for (const char *p = fmt; *p; ) {
-		// inline цветовой код <(bgfg)>
-		if (*p == '<' && p[1] == '(' && p[4] && p[5] == ')' && p[6] == '>') {
-			color = parse_color_code(p[2], p[3]);
-			p += 7;
-			continue;
-		}
+    uint8_t color = 0x07; // светло-серый на чёрном
+    for (const char *p = fmt; *p; ) {
+        // inline цветовой код <(bgfg)> — два шестнадцатеричных символа
+        if (*p == '<' && p[1] == '(' && p[2] && p[3] && p[4] == ')' && p[5] == '>') {
+            color = parse_color_code(p[2], p[3]);
+            p += 6;
+            continue;
+        }
 
 		if (*p != '%') { kputchar(*p++, color); continue; }
  		p++;

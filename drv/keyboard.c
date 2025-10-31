@@ -54,6 +54,7 @@ static const char scancode_to_ascii_shift[128] = {
 #define KEY_INSERT 0x88
 #define KEY_DELETE 0x89
 #define KEY_TAB         0x8A
+#define KEY_ESC        0x8B
 
 // Флаги состояния клавиатуры
 static volatile bool shift_pressed = false;
@@ -67,7 +68,6 @@ static void add_to_buffer(char c) {
                 keyboard_buffer[buffer_tail] = c;
                 buffer_tail = (buffer_tail + 1) % KEYBOARD_BUFFER_SIZE;
                 buffer_count++;
-                qemu_debug_printf("BUFFER: added '%c', count=%d\n", c, buffer_count);
         } 
         // else {
         //         qemu_debug_printf("BUFFER: full, dropped '%c'\n", c);
@@ -159,6 +159,9 @@ void keyboard_handler(cpu_registers_t* regs) {
                                 break;
                         case 0x0F: // Tab
                                 add_to_buffer(KEY_TAB);
+                                break;
+                        case 0x01: // Escape
+                                add_to_buffer(27); // ASCII ESC
                                 break;
                         default:
                                 // Обычная клавиша

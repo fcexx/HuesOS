@@ -147,10 +147,13 @@ error:
 
 section .bss
 align 4096
+global page_table_l4
 page_table_l4:
         resb 4096
+global page_table_l3
 page_table_l3:
         resb 4096
+global page_table_l3_fb
 page_table_l3_fb:
         resb 4096
 

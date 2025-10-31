@@ -17,6 +17,9 @@ char* strrchr(const char* str, int c);
 char* strstr(const char* haystack, const char* needle);
 char* strtok(char* str, const char* delim);
 int trim(char* str);
+// split string by any delimiters in delim; returns NULL-terminated array of tokens
+// writes number of tokens to *n if n != NULL
+char** split(const char* str, char* delim, int* n);
 
 // functions for working with memory
 void* memcpy(void* dest, const void* src, size_t n);

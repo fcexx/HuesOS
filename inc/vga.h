@@ -12,7 +12,9 @@
 
 void kprint(uint8_t *str);
 void kputchar(uint8_t character, uint8_t attribute_byte);
+void kprint_colorized(const char* str);
 void kclear();
+void kclear_col(uint8_t attribute_byte);
 void write(uint8_t character, uint8_t attribute_byte, uint16_t offset);
 void scroll_line();
 uint16_t get_cursor();

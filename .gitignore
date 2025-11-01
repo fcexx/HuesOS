@@ -1,0 +1,6 @@
+build/*
+iso/boot/axonos.elf
+*.iso
+*.elf
+*.bin
+*.o

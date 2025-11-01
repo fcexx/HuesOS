@@ -9,12 +9,12 @@ ISO_BOOT := $(ISO_DIR)/boot
 GRUB_DIR := $(ISO_BOOT)/grub
 KERNEL_SRC := kernel.asm
 KERNEL_OBJ := $(BUILD_DIR)/kernel.o
-KERNEL_ELF := $(BUILD_DIR)/huesos.elf
+KERNEL_ELF := $(BUILD_DIR)/axonos.elf
 KERNEL_BIN := $(BUILD_DIR)/kernel.bin
 MULTIBOOT_SRC := multiboot.asm
 MULTIBOOT_OBJ := $(BUILD_DIR)/multiboot.o
 MULTIBOOT_BIN := $(BUILD_DIR)/multiboot.bin
-ISO_IMAGE := $(BUILD_DIR)/huesos.iso
+ISO_IMAGE := $(BUILD_DIR)/axonos.iso
 
 CC := gcc -m64
 CFLAGS := -ffreestanding -O2 -nostdlib -fno-builtin -fno-stack-protector -fno-pic -mno-red-zone -mcmodel=kernel -Iinc -w
@@ -69,13 +69,13 @@ $(GRUB_DIR):
 
 
 iso: $(KERNEL_ELF) $(GRUB_DIR)/grub.cfg
-	@cp $(KERNEL_ELF) $(ISO_BOOT)/huesos.elf
+	@cp $(KERNEL_ELF) $(ISO_BOOT)/axonos.elf
 	@grub-mkrescue -o $(ISO_IMAGE) $(ISO_DIR) 2>/dev/null || { \
 		@echo "grub-mkrescue failed: try installing grub-pc-bin or xorriso" >&2; exit 1; \
 	}
 
 run: iso
-	@qemu-system-x86_64 -cdrom $(ISO_IMAGE) -m 512M -serial stdio
+	@qemu-system-x86_64 -cdrom $(ISO_IMAGE) -cpu host -enable-kvm -m 512M -serial stdio
 
 clean:
 	@rm -rf $(BUILD_DIR)

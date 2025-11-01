@@ -1,6 +1,7 @@
 #include <idt.h>
 #include <vga.h>
 #include <pic.h>
+#include <thread.h>
 //#include <pit.h>
 #include <stdint.h>
 //#include <thread.h>

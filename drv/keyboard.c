@@ -5,6 +5,27 @@
 #include <stdint.h>
 #include <serial.h>
 #include <string.h>
+#include <thread.h>
+
+// Вспомогательные функции для ожидания статусов контроллера PS/2
+static int ps2_wait_input_empty(void) {
+        // Wait until input buffer (bit1) is clear => we can write to 0x60/0x64
+        for (int i = 0; i < 100000; i++) {
+                if ((inb(0x64) & 0x02) == 0) return 1;
+        }
+        return 0;
+}
+
+static int ps2_wait_output_full(void) {
+        // Wait until output buffer (bit0) is set => data available at 0x60
+        for (int i = 0; i < 100000; i++) {
+                if ((inb(0x64) & 0x01) != 0) return 1;
+        }
+        return 0;
+}
+
+// Прототип функции обработки байта сканкода (используется в handler и для polling)
+void keyboard_process_scancode(uint8_t scancode);
 
 // Размер буфера клавиатуры
 #define KEYBOARD_BUFFER_SIZE 256
@@ -63,38 +84,49 @@ static volatile bool alt_pressed = false;
 
 // Добавить символ в буфер
 static void add_to_buffer(char c) {
-        acquire(&keyboard_lock);
+        // В ISR нельзя блокироваться на обычном спинлоке (риск deadlock),
+        // поэтому пытаемся захватить неблокирующе; если не получается —
+        // символ отбрасывается.
+        if (!try_acquire(&keyboard_lock)) {
+                return; // drop char to avoid deadlock
+        }
         if (buffer_count < KEYBOARD_BUFFER_SIZE) {
                 keyboard_buffer[buffer_tail] = c;
                 buffer_tail = (buffer_tail + 1) % KEYBOARD_BUFFER_SIZE;
                 buffer_count++;
-        } 
-        // else {
-        //         qemu_debug_printf("BUFFER: full, dropped '%c'\n", c);
-        // }
+        }
         release(&keyboard_lock);
 }
 
 // Получить символ из буфера
 static char get_from_buffer() {
         char c = 0;
-        acquire(&keyboard_lock);
-        
+        unsigned long _flags = 0;
+        acquire_irqsave(&keyboard_lock, &_flags);
+
         if (buffer_count > 0) {
                 c = keyboard_buffer[buffer_head];
                 buffer_head = (buffer_head + 1) % KEYBOARD_BUFFER_SIZE;
                 buffer_count--;
         }
-        
-        release(&keyboard_lock);
-        
+
+        release_irqrestore(&keyboard_lock, _flags);
+
         return c;
 }
 
 // Обработчик прерывания клавиатуры
 void keyboard_handler(cpu_registers_t* regs) {
         uint8_t scancode = inb(0x60);
-        
+        thread_t* cur = thread_current();
+        int curid = cur ? cur->tid : -1;
+        //qemu_debug_printf("kbd: scancode=0x%02x (current tid=%d)\n", scancode, curid);
+        keyboard_process_scancode(scancode);
+        // EOI отправляется центральным диспетчером прерываний в isr_dispatch
+}
+
+// Обработка одного байта сканкода (вынесена для возможности polling из PIT)
+void keyboard_process_scancode(uint8_t scancode) {
         // Обрабатываем только нажатие клавиш (не отпускание)
         if (scancode & 0x80) {
                 // Клавиша отпущена
@@ -111,70 +143,69 @@ void keyboard_handler(cpu_registers_t* regs) {
                                 alt_pressed = false;
                                 break;
                 }
-        } else {
-                // Клавиша нажата
-                
-                switch (scancode) {
-                        case 0x2A: // Left Shift
-                        case 0x36: // Right Shift
-                                shift_pressed = true;
-                                break;
-                        case 0x1D: // Left Ctrl
-                                ctrl_pressed = true;
-                                break;
-                        case 0x38: // Right Ctrl / Left Alt (same scancode)
-                                // Определяем по контексту или дополнительным флагам
-                                // Пока обрабатываем как Alt
-                                alt_pressed = true;
-                                break;
-                        case 0x48: // Up arrow
-                                add_to_buffer(KEY_UP);
-                                break;
-                        case 0x50: // Down arrow
-                                add_to_buffer(KEY_DOWN);
-                                break;
-                        case 0x4B: // Left arrow
-                                add_to_buffer(KEY_LEFT);
-                                break;
-                        case 0x4D: // Right arrow
-                                add_to_buffer(KEY_RIGHT);
-                                break;
-                        case 0x47: // Home
-                                add_to_buffer(KEY_HOME);
-                                break;
-                        case 0x4F: // End
-                                add_to_buffer(KEY_END);
-                                break;
-                        case 0x49: // Page Up
-                                add_to_buffer(KEY_PGUP);
-                                break;
-                        case 0x51: // Page Down
-                                add_to_buffer(KEY_PGDN);
-                                break;
-                        case 0x52: // Insert
-                                add_to_buffer(KEY_INSERT);
-                                break;
-                        case 0x53: // Delete
-                                add_to_buffer(KEY_DELETE);
-                                break;
-                        case 0x0F: // Tab
-                                add_to_buffer(KEY_TAB);
-                                break;
-                        case 0x01: // Escape
-                                add_to_buffer(27); // ASCII ESC
-                                break;
-                        default:
-                                // Обычная клавиша
-                                if (scancode < 128) {
-                                        char c = shift_pressed ? scancode_to_ascii_shift[scancode] : scancode_to_ascii[scancode];
-                                        if (c != 0) {
-                                                add_to_buffer(c);
-                                        }
-                                }
-                                break;
-                }
+                return;
         }
-        // EOI отправляется центральным диспетчером прерываний в isr_dispatch
+
+        // Клавиша нажата
+        switch (scancode) {
+                case 0x2A: // Left Shift
+                case 0x36: // Right Shift
+                        shift_pressed = true;
+                        break;
+                case 0x1D: // Left Ctrl
+                        ctrl_pressed = true;
+                        break;
+                case 0x38: // Right Ctrl / Left Alt (same scancode)
+                        // Пока обрабатываем как Alt
+                        alt_pressed = true;
+                        break;
+                case 0x48: // Up arrow
+                        add_to_buffer(KEY_UP);
+                        break;
+                case 0x50: // Down arrow
+                        add_to_buffer(KEY_DOWN);
+                        break;
+                case 0x4B: // Left arrow
+                        add_to_buffer(KEY_LEFT);
+                        break;
+                case 0x4D: // Right arrow
+                        add_to_buffer(KEY_RIGHT);
+                        break;
+                case 0x47: // Home
+                        add_to_buffer(KEY_HOME);
+                        break;
+                case 0x4F: // End
+                        add_to_buffer(KEY_END);
+                        break;
+                case 0x49: // Page Up
+                        add_to_buffer(KEY_PGUP);
+                        break;
+                case 0x51: // Page Down
+                        add_to_buffer(KEY_PGDN);
+                        break;
+                case 0x52: // Insert
+                        add_to_buffer(KEY_INSERT);
+                        break;
+                case 0x53: // Delete
+                        add_to_buffer(KEY_DELETE);
+                        break;
+                case 0x0F: // Tab
+                        add_to_buffer(KEY_TAB);
+                        break;
+                case 0x01: // Escape
+                        add_to_buffer(27); // ASCII ESC
+                        break;
+                default:
+                        // Обычная клавиша
+                        if (scancode < 128) {
+                                char c = shift_pressed ? scancode_to_ascii_shift[scancode] : scancode_to_ascii[scancode];
+                                if (c != 0) {
+                                        add_to_buffer(c);
+                                        //qemu_debug_printf("kbd: char '%c' (0x%02x) -> buffer_count=%d\n", c, (unsigned char)c, buffer_count);
+                                }
+                        }
+                        break;
+        }
 }
 
 // Инициализация PS/2 клавиатуры
@@ -194,15 +225,33 @@ void ps2_keyboard_init() {
         
         // Устанавливаем обработчик прерывания
         idt_set_handler(33, keyboard_handler);
+        // Ensure PIC delivers IRQ1
+        pic_unmask_irq(1);
+        // Try to enable first PS/2 port at controller level (command 0xAE)
+        outb(0x64, 0xAE);
+
+        // Read PS/2 controller command byte and ensure keyboard IRQ enabled (bit0)
+        if (!ps2_wait_input_empty()) qemu_debug_printf("ps2_keyboard_init: warning input buffer never emptied before reading cmd\n");
+        outb(0x64, 0x20); // request command byte
+        if (!ps2_wait_output_full()) qemu_debug_printf("ps2_keyboard_init: warning output buffer never filled for cmd\n");
+        uint8_t cmd = inb(0x60);
+        cmd |= 0x01; // enable IRQ1
+        if (!ps2_wait_input_empty()) qemu_debug_printf("ps2_keyboard_init: warning input buffer never emptied before writing cmd\n");
+        outb(0x64, 0x60); // write command byte
+        if (!ps2_wait_input_empty()) qemu_debug_printf("ps2_keyboard_init: warning input buffer never emptied before writing cmd byte value\n");
+        outb(0x60, cmd);
+        if (!ps2_wait_input_empty()) qemu_debug_printf("ps2_keyboard_init: warning input buffer busy before sending 0xF4\n");
+        outb(0x60, 0xF4);
 }
 
 // Получить символ (блокирующая функция, как в Unix)
 char kgetc() {
-        // Простая проверка - если нет символов, возвращаем 0
-        if (buffer_count == 0) {
-                return 0;
+        // Блокирующее ожидание: если нет символов, выполняем HLT с включёнными прерываниями
+        // процессор проснётся на аппаратное IRQ (PIT/PS2)
+        while (buffer_count == 0) {
+                asm volatile("sti; hlt" ::: "memory");
         }
-        
+
         return get_from_buffer();
 }
 

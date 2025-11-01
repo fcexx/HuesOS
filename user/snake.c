@@ -219,6 +219,9 @@ void snake_run(void) {
         strcpy(buf, "Best: "); int_to_str(best_score, buf + 6);
         draw_text(MAX_COLS - 10, 0, buf, 0x20);
         if (score == best_score && score > 0) draw_text((MAX_COLS-12)/2, 0, "NEW RECORD!", 0x20);
+        draw_text(2, 24, "Use Arrows to move, q to quit, esc to pause", 0x20);
+        draw_text(40, 25, "Difficulty: ", 0x20);
+        draw_text(2, 26, diff->name, 0x20);
 
         pit_sleep_ms(diff->delay_ms);
     }

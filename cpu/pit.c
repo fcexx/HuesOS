@@ -3,7 +3,7 @@
 #include <pic.h>
 #include <idt.h>
 // VGA text mode uses hardware cursor; no backbuffer swap needed
-//#include <thread.h>
+#include <thread.h>
 //#include <vbe.h>
 //#include <vbetty.h>
 
@@ -17,9 +17,9 @@ void pit_handler(cpu_registers_t* regs) {
         (void)regs;
         
         // Вызываем планировщик реже - каждые 10 тиков (10 мс при 1000 Гц)
-        // if (init && (pit_ticks % 10 == 0)) {
-        //         thread_schedule();
-        // }
+        if (init && (pit_ticks % 10 == 0)) {
+                thread_schedule();
+        }
 }
 
 // Initialize PIT with default frequency (100 Hz)

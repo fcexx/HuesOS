@@ -100,7 +100,7 @@ void ring0_shell()  {
                 return;
             }
             else if (strcmp(tokens[0], "echo") == 0) {
-                // печатаем остаток строки интерпретируя цветовые теги
+                // ???????? ??????? ?????? ????????????? ???????? ????
                 const char* p = input;
                 while (*p == ' ' || *p == '\t') p++;
                 const char* word = "echo";
@@ -121,11 +121,11 @@ void ring0_shell()  {
 void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {
     kclear();
     kprint("Initializing kernel...\n");
-    // Инициализируем сбор системной информации (CPUID, multiboot hints)
+    // ?????????????? ???? ????????? ?????????? (CPUID, multiboot hints)
     sysinfo_init(multiboot_magic, multiboot_info);
-    asm volatile("sti");
-    idt_init();
+    /* ??????? ?????????????? GDT/IDT/PIC, ?????? ????? ???????? ?????????? */
     gdt_init();
+    idt_init();
     pic_init();
     pit_init();
     paging_init();
@@ -133,6 +133,7 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {
     thread_init();
     iothread_init();
     ps2_keyboard_init();
+    asm volatile("sti");
 
     kprintf("kernel base: done (idt, gdt, pic, pit, paging, heap, keyboard)\n");
     kprintf("\n<(0f)>Welcome to %s <(0b)>%s<(0f)>!\n", OS_NAME, OS_VERSION);

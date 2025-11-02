@@ -159,7 +159,12 @@ void snake_run(void) {
     int won = 0;
 
     while (running) {
-        char c = kgetc();
+        /* Non-blocking keyboard check: don't call blocking kgetc() here
+         * because that would halt game progression until a key is pressed.
+         */
+        char c = 0;
+        if (kgetc_available()) c = kgetc();
+
         if (c) {
             if (c == 27) { // ESC toggle pause
                 paused = !paused;

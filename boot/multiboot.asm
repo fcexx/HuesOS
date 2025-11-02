@@ -148,95 +148,43 @@ error:
         cmp al, "1"
         je .error1
 
-.error2:
-        mov word [0xb8000], 0x0700 + 'E'
-        mov word [0xb8002], 0x0700 + 'r'
-        mov word [0xb8004], 0x0700 + 'r'
-        mov word [0xb8006], 0x0700 + 'o'
-        mov word [0xb8008], 0x0700 + 'r'
-        mov word [0xb800a], 0x0700 + ' '
-        mov word [0xb800c], 0x0700 + 'l'
-        mov word [0xb800e], 0x0700 + 'o'
-        mov word [0xb8010], 0x0700 + 'a'
-        mov word [0xb8012], 0x0700 + 'd'
-        mov word [0xb8014], 0x0700 + 'i'
-        mov word [0xb8016], 0x0700 + 'n'
-        mov word [0xb8018], 0x0700 + 'g'
-        mov word [0xb801a], 0x0700 + ' '
-        mov word [0xb801c], 0x0700 + 'k'
-        mov word [0xb801e], 0x0700 + 'e'
-        mov word [0xb8020], 0x0700 + 'r'
-        mov word [0xb8022], 0x0700 + 'n'
-        mov word [0xb8024], 0x0700 + 'e'
-        mov word [0xb8026], 0x0700 + 'l'
-        mov word [0xb8028], 0x0700 + ':'
-        mov word [0xb802a], 0x0700 + ' '
-        mov word [0xb802c], 0x0700 + 'T'
-        mov word [0xb802e], 0x0700 + 'h'
-        mov word [0xb8030], 0x0700 + 'e'
-        mov word [0xb8032], 0x0700 + ' '
-        mov word [0xb8034], 0x0700 + 's'
-        mov word [0xb8036], 0x0700 + 'y'
-        mov word [0xb8038], 0x0700 + 's'
-        mov word [0xb803a], 0x0700 + 't'
-        mov word [0xb803c], 0x0700 + 'e'
-        mov word [0xb803e], 0x0700 + 'm'
-        mov word [0xb8040], 0x0700 + ' '
-        mov word [0xb8042], 0x0700 + 'd'
-        mov word [0xb8044], 0x0700 + 'o'
-        mov word [0xb8046], 0x0700 + 'e'
-        mov word [0xb8048], 0x0700 + 's'
-        mov word [0xb804a], 0x0700 + ' '
-        mov word [0xb804c], 0x0700 + 'n'
-        mov word [0xb804e], 0x0700 + 'o'
-        mov word [0xb8050], 0x0700 + 't'
-        mov word [0xb8052], 0x0700 + ' '
-        mov word [0xb8054], 0x0700 + 's'
-        mov word [0xb8056], 0x0700 + 'u'
-        mov word [0xb8058], 0x0700 + 'p'
-        mov word [0xb805a], 0x0700 + 'p'
-        mov word [0xb805c], 0x0700 + 'o'
-        mov word [0xb805e], 0x0700 + 'r'
-        mov word [0xb8060], 0x0700 + 't'
-        mov word [0xb8062], 0x0700 + ' '
-        mov word [0xb8064], 0x0700 + 'x'
-        mov word [0xb8066], 0x0700 + '8'
-        mov word [0xb8068], 0x0700 + '6'
-        mov word [0xb806a], 0x0700 + '_'
-        mov word [0xb806c], 0x0700 + '6'
-        mov word [0xb806e], 0x0700 + '4'
-        mov word [0xb8070], 0x0700 + '.'
-        mov word [0xb8072], 0x0700 + ' '
-        mov word [0xb8074], 0x0700 + 'W'
-        mov word [0xb8076], 0x0700 + 'r'
-        mov word [0xb8078], 0x0700 + 'o'
-        mov word [0xb807a], 0x0700 + 'n'
-        mov word [0xb807c], 0x0700 + 'g'
-        mov word [0xb807e], 0x0700 + ' '
-        mov word [0xb8080], 0x0700 + 'C'
-        mov word [0xb8082], 0x0700 + 'P'
-        mov word [0xb8084], 0x0700 + 'U'
-        mov word [0xb8086], 0x0700 + '.'
+.error2: ; Error loading kernel: The system does not support x86_64. Wrong CPU.  
+        mov edi, error2_msg
+        call print_vga
+        cli
         hlt
-
 .error3:
-        mov dword [0xb8000], 0x4f524f45
-        mov dword [0xb8004], 0x4f3a4f52
-        mov dword [0xb8008], 0x4f204f20
-        mov byte  [0xb800a], al
-        hlt
-.error1:
-        mov dword [0xb8000], 0x4f524f45
-        mov dword [0xb8004], 0x4f3a4f52
-        mov dword [0xb8008], 0x4f204f20
-        mov byte  [0xb800a], al
+        mov edi, error3_msg
+        call print_vga
+        cli
         hlt
 .error4:
-        mov dword [0xb8000], 0x4f524f45
-        mov dword [0xb8004], 0x4f3a4f52
-        mov dword [0xb8008], 0x4f204f20
-        mov byte  [0xb800a], al
+        mov edi, error4_msg
+        call print_vga
+        cli
         hlt
+.error1:
+        mov edi, error1_msg
+        call print_vga
+        cli
+        hlt
+
+print_vga: ; takes string in edi
+        mov esi, 0xb8000
+        mov edx, 0
+        mov cl, 0x07
+.loop:
+        mov al, [edi]
+        test al, al
+        jz .done
+        
+        mov [esi + edx], al
+        mov [esi + edx + 1], cl
+        add edx, 2
+        inc edi
+        jmp .loop
+.done:
+        ret
 section .bss
 align 4096
 global page_table_l4
@@ -250,6 +198,11 @@ page_table_l3_fb:
         resb 4096
 
 section .rodata
+
+error1_msg: db "Error loading kernel: no cpuid support.", 0
+error2_msg: db "Error loading kernel: your cpu does not support 64 mode.", 0
+error3_msg: db "Error loading kernel: code 3. If you see this, please contact the Axon team.", 0
+error4_msg: db "Error loading kernel: code 4. If you see this, please contact the Axon team.", 0
 ; ---------------- GDT ----------------
 align 8
 tmp_gdt:

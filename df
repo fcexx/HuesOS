@@ -1,0 +1,203 @@
+[1mdiff --git a/LICENSE b/LICENSE[m
+[1mdeleted file mode 100644[m
+[1mindex ebe02d0..0000000[m
+[1m--- a/LICENSE[m
+[1m+++ /dev/null[m
+[36m@@ -1,21 +0,0 @@[m
+[31m-MIT License[m
+[31m-[m
+[31m-Copyright (c) 2025 The Axon Team[m
+[31m-[m
+[31m-Permission is hereby granted, free of charge, to any person obtaining a copy[m
+[31m-of this software and associated documentation files (the "Software"), to deal[m
+[31m-in the Software without restriction, including without limitation the rights[m
+[31m-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell[m
+[31m-copies of the Software, and to permit persons to whom the Software is[m
+[31m-furnished to do so, subject to the following conditions:[m
+[31m-[m
+[31m-The above copyright notice and this permission notice shall be included in all[m
+[31m-copies or substantial portions of the Software.[m
+[31m-[m
+[31m-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR[m
+[31m-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,[m
+[31m-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE[m
+[31m-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER[m
+[31m-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,[m
+[31m-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE[m
+[31m-SOFTWARE.[m
+\ No newline at end of file[m
+[1mdiff --git a/README.md b/README.md[m
+[1mdeleted file mode 100644[m
+[1mindex 8883251..0000000[m
+[1m--- a/README.md[m
+[1m+++ /dev/null[m
+[36m@@ -1,76 +0,0 @@[m
+[31m-<h1 align="center">ğŸŠ Axon OS</h1>[m
+[31m-[m
+[31m-<p align="center">[m
+[31m-  <b>Minimal. Fast. Open.</b><br>[m
+[31m-  A lightweight, experimental operating system written by a small team.<br>[m
+[31m-  <i>Because simplicity is power.</i>[m
+[31m-</p>[m
+[31m-[m
+[31m----[m
+[31m-[m
+[31m-<p align="center">[m
+[31m-  <a href="https://github.com/fcexx/AxonOS/stargazers">[m
+[31m-    <img src="https://img.shields.io/github/stars/fcexx/AxonOS?style=for-the-badge&color=yellow" alt="Stars">[m
+[31m-  </a>[m
+[31m-  <a href="https://github.com/fcexx/AxonOS/network/members">[m
+[31m-    <img src="https://img.shields.io/github/forks/fcexx/AxonOS?style=for-the-badge&color=orange" alt="Forks">[m
+[31m-  </a>[m
+[31m-  <a href="https://github.com/fcexx/AxonOS/commits/main">[m
+[31m-    <img src="https://img.shields.io/github/last-commit/fcexx/AxonOS?style=for-the-badge&color=brightgreen" alt="Last Commit">[m
+[31m-  </a>[m
+[31m-  <a href="https://github.com/fcexx/AxonOS/issues">[m
+[31m-    <img src="https://img.shields.io/github/issues/fcexx/AxonOS?style=for-the-badge&color=blue" alt="Issues">[m
+[31m-  </a>[m
+[31m-  <a href="https://github.com/fcexx/AxonOS/blob/main/LICENSE">[m
+[31m-    <img src="https://img.shields.io/github/license/fcexx/AxonOS?style=for-the-badge&color=red" alt="License">[m
+[31m-  </a>[m
+[31m-</p>[m
+[31m-[m
+[31m----[m
+[31m-[m
+[31m-### âœ¨ Features[m
+[31m-- âš™ï¸ Custom kernel written in C  [m
+[31m-- ğŸ’» Built-in Ring0 shell  [m
+[31m-- ğŸ§  Smart memory & task management  [m
+[31m-- â±ï¸ Fast boot & clean modular design  [m
+[31m-- ğŸ§© Fully open source â€” learn, modify, improve  [m
+[31m-- ğŸ Cross-platform build support (Linux / Windows via WSL)[m
+[31m-[m
+[31m----[m
+[31m-[m
+[31m-### âš™ï¸ Installation[m
+[31m-[m
+[31m-#### ğŸ§ Linux / macOS[m
+[31m-```bash[m
+[31m-git clone https://github.com/fcexx/AxonOS.git[m
+[31m-cd AxonOS[m
+[31m-make clean && make && make run[m
+[31m-```[m
+[31m-[m
+[31m-#### ğŸªŸ Windows (via WSL or MSYS2)[m
+[31m-```bash[m
+[31m-git clone https://github.com/fcexx/AxonOS.git[m
+[31m-cd AxonOS[m
+[31m-make clean && make && make run[m
+[31m-```[m
+[31m-[m
+[31m-#### ğŸ’¡ Requirements[m
+[31m-- `qemu`[m
+[31m-- `make`[m
+[31m-- `gcc`[m
+[31m-[m
+[31m----[m
+[31m-[m
+[31m-### â­ Star Us![m
+[31m-If you like **Axon OS**, donâ€™t forget to **â­ star the repo** â€” it really helps visibility!  [m
+[31m-[m
+[31m-<p align="center">[m
+[31m-  â­â­â­â­â­  [m
+[31m-  <br><i>â€œA tiny kernel with big ambitions.â€</i>[m
+[31m-</p>[m
+[31m-[m
+[31m----[m
+[31m-[m
+[31m-<p align="center">[m
+[31m-  Â© 2025 AxonOS Project â€” Made with ğŸ–¤ by the community[m
+[31m-</p>[m
+[1mdiff --git a/build/axonos.elf b/build/axonos.elf[m
+[1mindex 056af97..8ab55ef 100755[m
+Binary files a/build/axonos.elf and b/build/axonos.elf differ
+[1mdiff --git a/build/axonos.iso b/build/axonos.iso[m
+[1mindex b4ce6ed..e046c38 100644[m
+Binary files a/build/axonos.iso and b/build/axonos.iso differ
+[1mdiff --git a/build/core/debug.c.o b/build/core/debug.c.o[m
+[1mindex 2b92026..603ebe7 100644[m
+Binary files a/build/core/debug.c.o and b/build/core/debug.c.o differ
+[1mdiff --git a/build/core/kernelcore.c.o b/build/core/kernelcore.c.o[m
+[1mindex 8649a87..719ce78 100644[m
+Binary files a/build/core/kernelcore.c.o and b/build/core/kernelcore.c.o differ
+[1mdiff --git a/build/core/spinlock.c.o b/build/core/spinlock.c.o[m
+[1mindex 84eb90d..0eb5468 100644[m
+Binary files a/build/core/spinlock.c.o and b/build/core/spinlock.c.o differ
+[1mdiff --git a/build/cpu/gdt.c.o b/build/cpu/gdt.c.o[m
+[1mindex 4a6d5f9..eb70ac3 100644[m
+Binary files a/build/cpu/gdt.c.o and b/build/cpu/gdt.c.o differ
+[1mdiff --git a/build/cpu/idt.c.o b/build/cpu/idt.c.o[m
+[1mindex 59378b4..de107c5 100644[m
+Binary files a/build/cpu/idt.c.o and b/build/cpu/idt.c.o differ
+[1mdiff --git a/build/cpu/iothread.c.o b/build/cpu/iothread.c.o[m
+[1mindex dbfc45f..3a698fb 100644[m
+Binary files a/build/cpu/iothread.c.o and b/build/cpu/iothread.c.o differ
+[1mdiff --git a/build/cpu/pic.c.o b/build/cpu/pic.c.o[m
+[1mindex 7544116..dc9fe54 100644[m
+Binary files a/build/cpu/pic.c.o and b/build/cpu/pic.c.o differ
+[1mdiff --git a/build/cpu/pit.c.o b/build/cpu/pit.c.o[m
+[1mindex bed5f03..d5ac782 100644[m
+Binary files a/build/cpu/pit.c.o and b/build/cpu/pit.c.o differ
+[1mdiff --git a/build/cpu/serial.c.o b/build/cpu/serial.c.o[m
+[1mindex d5e71e1..79078e5 100644[m
+Binary files a/build/cpu/serial.c.o and b/build/cpu/serial.c.o differ
+[1mdiff --git a/build/cpu/sysinfo.c.o b/build/cpu/sysinfo.c.o[m
+[1mindex c7fb2cd..e83c1c9 100644[m
+Binary files a/build/cpu/sysinfo.c.o and b/build/cpu/sysinfo.c.o differ
+[1mdiff --git a/build/cpu/thread.c.o b/build/cpu/thread.c.o[m
+[1mindex 5724d76..01980e0 100644[m
+Binary files a/build/cpu/thread.c.o and b/build/cpu/thread.c.o differ
+[1mdiff --git a/build/drv/keyboard.c.o b/build/drv/keyboard.c.o[m
+[1mindex 41ddce1..5fe1644 100644[m
+Binary files a/build/drv/keyboard.c.o and b/build/drv/keyboard.c.o differ
+[1mdiff --git a/build/drv/vga.c.o b/build/drv/vga.c.o[m
+[1mindex 09dceb8..0c51d0a 100644[m
+Binary files a/build/drv/vga.c.o and b/build/drv/vga.c.o differ
+[1mdiff --git a/build/libc/string.c.o b/build/libc/string.c.o[m
+[1mindex fbfcd77..5f4a966 100644[m
+Binary files a/build/libc/string.c.o and b/build/libc/string.c.o differ
+[1mdiff --git a/build/mem/heap.c.o b/build/mem/heap.c.o[m
+[1mindex 79c2bd3..9d4e982 100644[m
+Binary files a/build/mem/heap.c.o and b/build/mem/heap.c.o differ
+[1mdiff --git a/build/mem/paging.c.o b/build/mem/paging.c.o[m
+[1mindex d828914..5d7f6c6 100644[m
+Binary files a/build/mem/paging.c.o and b/build/mem/paging.c.o differ
+[1mdiff --git a/build/user/snake.c.o b/build/user/snake.c.o[m
+[1mindex f1258f2..d32b646 100644[m
+Binary files a/build/user/snake.c.o and b/build/user/snake.c.o differ
+[1mdiff --git a/core/kernelcore.c b/core/kernelcore.c[m
+[1mindex aa52e9a..2051801 100644[m
+[1m--- a/core/kernelcore.c[m
+[1m+++ b/core/kernelcore.c[m
+[36m@@ -90,6 +90,7 @@[m [mvoid ring0_shell()  {[m
+             else if (strcmp(tokens[0], "about") == 0) {[m
+                 kprintf("%s x86_64 version %s (2025)\nAuthors: kotazzz, fcexx, dasteldi, whiterose\n", OS_NAME, OS_VERSION);[m
+                 kprintf("GitHub organization: <(0b)>https://github.com/Axon-company\n");[m
+[32m+[m[32m                kprintf("Official site: <(0b)>wh27961.web4.maze-tech.ru\n");[m
+                 kprintf("Axon team 2025. All rights reserved.\n\n");[m
+                 kprintf("CPU: %s\n", sysinfo_cpu_name());[m
+                 //kprintf("RAM: %d MB\n", sysinfo_ram_mb());[m
+[36m@@ -120,13 +121,13 @@[m [mvoid ring0_shell()  {[m
+ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {[m
+     kclear();[m
+     [m
+[31m-    kprintf("<(0b)> °±²ÛÛÛÛÛÛ²±°°±²Û²±°°±²Û²±°°±²ÛÛÛÛÛÛ²±°°±²ÛÛÛÛÛÛÛ²±° °±²ÛÛÛÛÛÛ²±° °±²ÛÛÛÛÛÛÛ²±°\n");[m
+[31m-    kprintf("<(0b)>°±²Û²±°°±²Û²±°±²Û²±°°±²Û²±°±²Û²±°°±²Û²±°±²Û²±°°±²Û²±°±²Û²±°°±²Û²±°±²Û²±°\n");[m
+[31m-    kprintf("<(0b)>°±²Û²±°°±²Û²±°±²Û²±°°±²Û²±°±²Û²±°°±²Û²±°±²Û²±°°±²Û²±°±²Û²±°°±²Û²±°±²Û²±°\n");[m
+[31m-    kprintf("<(0b)>°±²ÛÛÛÛÛÛÛÛ²±°°±²ÛÛÛÛÛÛ²±°°±²Û²±°°±²Û²±°±²Û²±°°±²Û²±°±²Û²±°°±²Û²±°°±²ÛÛÛÛÛÛ²±°\n");[m
+[31m-    kprintf("<(0b)>°±²Û²±°°±²Û²±°±²Û²±°°±²Û²±°±²Û²±°°±²Û²±°±²Û²±°°±²Û²±°±²Û²±°°±²Û²±°      °±²Û²±°\n");[m
+[31m-    kprintf("<(0b)>°±²Û²±°°±²Û²±°±²Û²±°°±²Û²±°±²Û²±°°±²Û²±°±²Û²±°°±²Û²±°±²Û²±°°±²Û²±°      °±²Û²±°\n");[m
+[31m-    kprintf("<(0b)>°±²Û²±°°±²Û²±°±²Û²±°°±²Û²±°°±²ÛÛÛÛÛÛ²±°°±²Û²±°°±²Û²±°°±²ÛÛÛÛÛÛ²±°°±²ÛÛÛÛÛÛÛ²±°\n\n");[m
+[32m+[m[32m    kprintf("<(0b)> øñı??????ıñøøñı?ıñøøñı?ıñøøñı??????ıñøøñı???????ıñø øñı??????ıñø øñı???????ıñø\n");[m
+[32m+[m[32m    kprintf("<(0b)>øñı?ıñøøñı?ıñøñı?ıñøøñı?ıñøñı?ıñøøñı?ıñøñı?ıñøøñı?ıñøñı?ıñøøñı?ıñøñı?ıñø\n");[m
+[32m+[m[32m    kprintf("<(0b)>øñı?ıñøøñı?ıñøñı?ıñøøñı?ıñøñı?ıñøøñı?ıñøñı?ıñøøñı?ıñøñı?ıñøøñı?ıñøñı?ıñø\n");[m
+[32m+[m[32m    kprintf("<(0b)>øñı????????ıñøøñı??????ıñøøñı?ıñøøñı?ıñøñı?ıñøøñı?ıñøñı?ıñøøñı?ıñøøñı??????ıñø\n");[m
+[32m+[m[32m    kprintf("<(0b)>øñı?ıñøøñı?ıñøñı?ıñøøñı?ıñøñı?ıñøøñı?ıñøñı?ıñøøñı?ıñøñı?ıñøøñı?ıñø      øñı?ıñø\n");[m
+[32m+[m[32m    kprintf("<(0b)>øñı?ıñøøñı?ıñøñı?ıñøøñı?ıñøñı?ıñøøñı?ıñøñı?ıñøøñı?ıñøñı?ıñøøñı?ıñø      øñı?ıñø\n");[m
+[32m+[m[32m    kprintf("<(0b)>øñı?ıñøøñı?ıñøñı?ıñøøñı?ıñøøñı??????ıñøøñı?ıñøøñı?ıñøøñı??????ıñøøñı???????ıñø\n\n");[m
+ [m
+     kprint("Initializing kernel...\n");[m
+     /* getting system information */[m
+[1mdiff --git a/iso/boot/axonos.elf b/iso/boot/axonos.elf[m
+[1mindex 056af97..8ab55ef 100755[m
+Binary files a/iso/boot/axonos.elf and b/iso/boot/axonos.elf differ

@@ -10,6 +10,7 @@
 #include <heap.h>
 #include <paging.h>
 #include <snake.h>
+#include <tetris.h>
 #include <sysinfo.h>
 #include <thread.h>
 
@@ -36,6 +37,7 @@ void ring0_shell()  {
                 kprint("shutdown - shutdown the system\n");
                 kprint("echo <text> - print text\n");
                 kprint("snake - run the snake game\n");
+                kprint("tetris - run the tetris game\n");
                 kprint("about - show information about authors and system\n");
                 kprint("exit - exit the shell\n");
             } 
@@ -44,6 +46,9 @@ void ring0_shell()  {
             }
             else if (strcmp(tokens[0], "snake") == 0) {
                 snake_run();
+            }
+            else if (strcmp(tokens[0], "tetris") == 0) {
+                tetris_run();
             }
             else if (strcmp(tokens[0], "thread") == 0) {
                 if (ntok == 1) {

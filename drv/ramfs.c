@@ -1,0 +1,257 @@
+#include <stdint.h>
+#include <stddef.h>
+#include <string.h>
+#include "../inc/fs.h"
+#include "../inc/ext2.h"
+#include "../inc/ramfs.h"
+#include "../inc/heap.h"
+
+struct ramfs_node {
+    char *name;
+    int is_dir;
+    char *data;
+    size_t size;
+    struct ramfs_node *parent;
+    struct ramfs_node *children; /* linked list of children */
+    struct ramfs_node *next; /* sibling */
+};
+
+struct ramfs_file_handle {
+    struct ramfs_node *node;
+};
+
+static struct fs_driver ramfs_driver;
+static struct fs_driver_ops ramfs_ops;
+static struct ramfs_node *ramfs_root = NULL;
+static uint32_t ramfs_next_inode = 10;
+
+static struct ramfs_node *ramfs_alloc_node(const char *name, int is_dir) {
+    struct ramfs_node *n = (struct ramfs_node*)kmalloc(sizeof(*n));
+    if (!n) return NULL;
+    memset(n, 0, sizeof(*n));
+    size_t l = strlen(name) + 1;
+    n->name = (char*)kmalloc(l);
+    memcpy(n->name, name, l);
+    n->is_dir = is_dir;
+    return n;
+}
+
+static struct ramfs_node *ramfs_find_child(struct ramfs_node *parent, const char *name) {
+    if (!parent || !parent->children) return NULL;
+    struct ramfs_node *c = parent->children;
+    while (c) {
+        if (strcmp(c->name, name) == 0) return c;
+        c = c->next;
+    }
+    return NULL;
+}
+
+static struct ramfs_node *ramfs_lookup(const char *path) {
+    if (!path) return NULL;
+    if (strcmp(path, "/") == 0) return ramfs_root;
+    if (path[0] != '/') return NULL;
+    char *tmp = (char*)kmalloc(strlen(path)+1);
+    strcpy(tmp, path+1); /* skip leading slash */
+    struct ramfs_node *cur = ramfs_root;
+    char *tok = strtok(tmp, "/");
+    while (tok && cur) {
+        cur = ramfs_find_child(cur, tok);
+        tok = strtok(NULL, "/");
+    }
+    kfree(tmp);
+    return cur;
+}
+
+static int ramfs_create(const char *path, struct fs_file **out_file) {
+    if (!path || path[0] != '/') return -1;
+    /* find parent */
+    char *tmp = (char*)kmalloc(strlen(path)+1);
+    strcpy(tmp, path);
+    char *slash = strrchr(tmp, '/');
+    char *name = NULL;
+    char parent_path[256];
+    if (slash == tmp) {
+        /* parent is root */
+        strcpy(parent_path, "/");
+        name = slash + 1;
+    } else {
+        *slash = '\0';
+        strcpy(parent_path, tmp);
+        name = slash + 1;
+    }
+    struct ramfs_node *parent = ramfs_lookup(parent_path);
+    if (!parent) { kfree(tmp); return -2; }
+    if (!parent->is_dir) { kfree(tmp); return -3; }
+    if (ramfs_find_child(parent, name)) { kfree(tmp); return -4; }
+    struct ramfs_node *n = ramfs_alloc_node(name, 0);
+    if (!n) { kfree(tmp); return -5; }
+    n->parent = parent;
+    /* insert at head */
+    n->next = parent->children;
+    parent->children = n;
+    /* create fs_file */
+    struct fs_file *f = (struct fs_file*)kmalloc(sizeof(struct fs_file));
+    memset(f,0,sizeof(*f));
+    size_t plen = strlen(path)+1;
+    char *pp = (char*)kmalloc(plen);
+    memcpy(pp, path, plen);
+    f->path = pp;
+    f->size = 0;
+    f->fs_private = ramfs_driver.driver_data;
+    f->type = n->is_dir ? FS_TYPE_DIR : FS_TYPE_REG;
+    struct ramfs_file_handle *fh = (struct ramfs_file_handle*)kmalloc(sizeof(*fh));
+    fh->node = n;
+    f->driver_private = fh;
+    if (out_file) *out_file = f;
+    kfree(tmp);
+    return 0;
+}
+
+static int ramfs_open(const char *path, struct fs_file **out_file) {
+    struct ramfs_node *n = ramfs_lookup(path);
+    if (!n) return -1;
+    struct fs_file *f = (struct fs_file*)kmalloc(sizeof(struct fs_file));
+    memset(f,0,sizeof(*f));
+    size_t plen = strlen(path)+1;
+    char *pp = (char*)kmalloc(plen);
+    memcpy(pp, path, plen);
+    f->path = pp;
+    f->size = n->size;
+    f->fs_private = ramfs_driver.driver_data;
+    f->type = n->is_dir ? FS_TYPE_DIR : FS_TYPE_REG;
+    struct ramfs_file_handle *fh = (struct ramfs_file_handle*)kmalloc(sizeof(*fh));
+    fh->node = n;
+    f->driver_private = fh;
+    if (out_file) *out_file = f;
+    return 0;
+}
+
+static ssize_t ramfs_read(struct fs_file *file, void *buf, size_t size, size_t offset) {
+    if (!file || !file->driver_private) return -1;
+    struct ramfs_file_handle *fh = (struct ramfs_file_handle*)file->driver_private;
+    struct ramfs_node *n = fh->node;
+    if (n->is_dir) {
+        /* produce ext2-like dir entries */
+        size_t pos = 0;
+        uint32_t inode = 1;
+        struct ext2_dir_entry de;
+        uint8_t *out = (uint8_t*)buf;
+        for (struct ramfs_node *c = n->children; c; c = c->next) {
+            size_t namelen = strlen(c->name);
+            de.inode = inode++;
+            de.rec_len = (uint16_t)(8 + namelen);
+            de.name_len = (uint8_t)namelen;
+            de.file_type = c->is_dir ? EXT2_FT_DIR : EXT2_FT_REG_FILE;
+            if (pos + de.rec_len > size) break;
+            memcpy(out + pos, &de, 8);
+            memcpy(out + pos + 8, c->name, namelen);
+            pos += de.rec_len;
+        }
+        return (ssize_t)pos;
+    } else {
+        if (offset >= n->size) return 0;
+        if (offset + size > n->size) size = n->size - offset;
+        memcpy(buf, n->data + offset, size);
+        return (ssize_t)size;
+    }
+}
+
+static ssize_t ramfs_write(struct fs_file *file, const void *buf, size_t size, size_t offset) {
+    if (!file || !file->driver_private) return -1;
+    struct ramfs_file_handle *fh = (struct ramfs_file_handle*)file->driver_private;
+    struct ramfs_node *n = fh->node;
+    if (n->is_dir) return -1;
+    size_t new_size = offset + size;
+    if (new_size > n->size) {
+        char *d = (char*)krealloc(n->data, new_size);
+        if (!d) return -1;
+        n->data = d;
+        n->size = new_size;
+    }
+    memcpy(n->data + offset, buf, size);
+    return (ssize_t)size;
+}
+
+static void ramfs_release(struct fs_file *file) {
+    if (!file) return;
+    if (file->driver_private) kfree(file->driver_private);
+    if (file->path) kfree((void*)file->path);
+    kfree(file);
+}
+
+int ramfs_mkdir(const char *path) {
+    if (!path) return -1;
+    /* create directory node */
+    if (path[0] != '/') return -1;
+    char *tmp = (char*)kmalloc(strlen(path)+2);
+    strcpy(tmp, path);
+    /* ensure no trailing slash */
+    size_t l = strlen(tmp);
+    if (l > 1 && tmp[l-1] == '/') tmp[l-1] = '\0';
+    /* find parent */
+    char *slash = strrchr(tmp, '/');
+    char parent_path[256];
+    char *name;
+    if (slash == tmp) { strcpy(parent_path, "/"); name = slash + 1; }
+    else { *slash = '\0'; strcpy(parent_path, tmp); name = slash + 1; }
+    struct ramfs_node *parent = ramfs_lookup(parent_path);
+    if (!parent) { kfree(tmp); return -2; }
+    if (!parent->is_dir) { kfree(tmp); return -3; }
+    if (ramfs_find_child(parent, name)) { kfree(tmp); return -4; }
+    struct ramfs_node *n = ramfs_alloc_node(name, 1);
+    n->parent = parent;
+    n->next = parent->children;
+    parent->children = n;
+    kfree(tmp);
+    return 0;
+}
+
+int ramfs_remove(const char *path) {
+    if (!path) return -1;
+    if (strcmp(path, "/") == 0) return -2;
+    struct ramfs_node *n = ramfs_lookup(path);
+    if (!n) return -3;
+    struct ramfs_node *p = n->parent;
+    if (!p) return -4;
+    /* unlink from parent's children */
+    struct ramfs_node **pp = &p->children;
+    while (*pp) {
+        if (*pp == n) { *pp = n->next; break; }
+        pp = &(*pp)->next;
+    }
+    /* free recursively */
+    /* simple recursive free */
+    struct ramfs_node *stack[64]; int sp = 0;
+    stack[sp++] = n;
+    while (sp) {
+        struct ramfs_node *cur = stack[--sp];
+        for (struct ramfs_node *c = cur->children; c; c = c->next) {
+            if (sp < 64) stack[sp++] = c;
+        }
+        if (cur->name) kfree(cur->name);
+        if (cur->data) kfree(cur->data);
+        kfree(cur);
+    }
+    return 0;
+}
+
+int ramfs_register(void) {
+    /* init root */
+    ramfs_root = ramfs_alloc_node("", 1);
+    ramfs_root->name = (char*)kmalloc(2);
+    strcpy(ramfs_root->name, "");
+    ramfs_root->parent = NULL;
+    ramfs_driver.ops = &ramfs_ops;
+    ramfs_driver.driver_data = (void*)ramfs_root;
+    ramfs_ops.name = "ramfs";
+    ramfs_ops.create = ramfs_create;
+    ramfs_ops.open = ramfs_open;
+    ramfs_ops.read = ramfs_read;
+    ramfs_ops.write = ramfs_write;
+    ramfs_ops.release = ramfs_release;
+    return fs_register_driver(&ramfs_driver);
+}
+
+int ramfs_unregister(void) {
+    return fs_unregister_driver(&ramfs_driver);
+}

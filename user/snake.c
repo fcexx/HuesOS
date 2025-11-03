@@ -1,4 +1,4 @@
-// ??????????? ???????????????? ??????? ???? ? ???? "??????" ? `user/snake.c`.
+
 #include "../inc/snake.h"
 #include "../inc/vga.h"
 #include "../inc/keyboard.h"
@@ -6,13 +6,11 @@
 #include <stdint.h>
 #include <string.h>
 
-// ???? ??????? (?????????? ? keyboard.c)
 #define KEY_UP         0x80
 #define KEY_DOWN       0x81
 #define KEY_LEFT       0x82
 #define KEY_RIGHT      0x83
 
-// ??????? ??????? ? ????? ?? ????? ??????
 #define GAME_MIN_X 1
 #define GAME_MIN_Y 1
 #define GAME_MAX_X (MAX_COLS - 2)
@@ -45,13 +43,10 @@ static void draw_border(void) {
     }
 }
 
-// ???????? ??????? kprintf (?????????? ??????????? ? vga.h)
 void kprintf(const char* fmt, ...);
 
-// ?????? ???????? ? ??????? ????? ?????????
 static int best_score = 0;
 
-// ?????????
 typedef struct Difficulty { const char* name; uint32_t delay_ms; int start_len; } Difficulty;
 static const Difficulty difficulties[] = {
     {"Very Easy", 320, 3},
@@ -71,7 +66,7 @@ static int show_menu_and_get_choice(void) {
     uint8_t title_y = 3;
     draw_text(title_x, title_y, title, WHITE_ON_BLACK);
 
-    int sel = 3; // default Normal
+    int sel = 3;
     int running = 1;
     while (running) {
         for (int i = 0; i < DIFFICULTY_COUNT; i++) {
@@ -88,7 +83,7 @@ static int show_menu_and_get_choice(void) {
         if ((unsigned char)c == KEY_UP) { if (sel > 0) sel--; }
         else if ((unsigned char)c == KEY_DOWN) { if (sel < DIFFICULTY_COUNT-1) sel++; }
         else if (c == '\n' || c == '\r') { running = 0; }
-        else if (c == 27) { // ESC - ????? ? ????????
+        else if (c == 27) {
             kclear();
             return -1;
         }
@@ -96,7 +91,6 @@ static int show_menu_and_get_choice(void) {
     return sel;
 }
 
-// ????????? ??????? ??? ??????????? ????? ? ?????? (??? libc)
 static void int_to_str(int v, char *buf) {
     if (v == 0) { buf[0] = '0'; buf[1] = '\0'; return; }
     int neg = 0; if (v < 0) { neg = 1; v = -v; }
@@ -107,7 +101,6 @@ static void int_to_str(int v, char *buf) {
     buf[i] = '\0';
 }
 
-// ???????? ????? ?????? ? ????? ??????? ???????
 static void show_victory(int score) {
     if (score > best_score) best_score = score;
     kclear_col(0x1);
@@ -122,15 +115,15 @@ static void show_victory(int score) {
     draw_text(x1, y-1, msg1, WHITE_ON_BLACK);
     draw_text(x2, y, msg2, WHITE_ON_BLACK);
     draw_text(x3, y+1, msg3, GRAY_ON_BLACK);
-    // ????? ???????
+
     while (!kgetc_available()) { asm volatile("hlt"); }
-    // ????????? ??????
+
     (void)kgetc();
 }
 
 void snake_run(void) {
     int choice = show_menu_and_get_choice();
-    if (choice < 0) return; // ????? ? ????
+    if (choice < 0) return;
 
     const Difficulty *diff = &difficulties[choice];
 
@@ -166,7 +159,7 @@ void snake_run(void) {
         if (kgetc_available()) c = kgetc();
 
         if (c) {
-            if (c == 27) { // ESC toggle pause
+            if (c == 27) {
                 paused = !paused;
                 if (paused) draw_text((MAX_COLS-6)/2, (MAX_ROWS/2), "PAUSED", WHITE_ON_BLACK);
                 else { for (int i = 0; i < 6; i++) draw_cell((MAX_COLS-6)/2 + i, (MAX_ROWS/2), ' ', WHITE_ON_BLACK); }
@@ -215,9 +208,9 @@ void snake_run(void) {
         if (snake_len > 1) draw_cell(snake[1].x, snake[1].y, 'o', 0x0e);
         draw_cell(food.x, food.y, '*', 0x0c);
 
-        // HUD: Score ? Best
+    
         char buf[32];
-        draw_text(2, 0, "                ", 0x20); // ???????
+        draw_text(2, 0, "                ", 0x20);
         draw_text(MAX_COLS - 14, 0, "              ", 0x20);
         strcpy(buf, "Score: "); int_to_str(score, buf + 7);
         draw_text(2, 0, buf, 0x20);

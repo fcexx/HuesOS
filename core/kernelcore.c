@@ -15,6 +15,7 @@
 #include <clock.h>
 #include <sysinfo.h>
 #include <thread.h>
+#include <neofetch.h>
 
 #include <iothread.h>
 
@@ -27,7 +28,6 @@ void ring0_shell()  {
     for (;;) {
         kprintf("<(0f)>AxonOS > ");
         input = kgets(input_buf, 512);
-        //if (!input) { asm volatile("hlt"); continue; }
         int ntok = 0;
         char **tokens = split(input, " ", &ntok);
         if (ntok > 0) { 
@@ -45,6 +45,7 @@ void ring0_shell()  {
                 kprint("date - show current date from RTC\n");
                 kprint("uptime - show system uptime based on RTC ticks\n");
                 kprint("about - show information about authors and system\n");
+                kprint("neofetch - show system info with logo\n");
                 kprint("exit - exit the shell\n");
             } 
             else if (strcmp(tokens[0], "clear") == 0) {
@@ -69,7 +70,12 @@ void ring0_shell()  {
                 } else if (ntok > 1) {
                     if (strcmp(tokens[1], "list") == 0) {
                         for (int i = 0; i < thread_get_count(); i++) {
-                            kprintf("%d: %s - %s\n", thread_get(i)->tid, thread_get(i)->name, thread_get(i)->state == THREAD_RUNNING ? "running" : thread_get(i)->state == THREAD_READY ? "ready" : thread_get(i)->state == THREAD_BLOCKED ? "blocked" : thread_get(i)->state == THREAD_TERMINATED ? "terminated" : thread_get(i)->state == THREAD_SLEEPING ? "sleeping" : "unknown");
+                            kprintf("%d: %s - %s\n", thread_get(i)->tid, thread_get(i)->name, 
+                                thread_get(i)->state == THREAD_RUNNING ? "running" : 
+                                thread_get(i)->state == THREAD_READY ? "ready" : 
+                                thread_get(i)->state == THREAD_BLOCKED ? "blocked" : 
+                                thread_get(i)->state == THREAD_TERMINATED ? "terminated" : 
+                                thread_get(i)->state == THREAD_SLEEPING ? "sleeping" : "unknown");
                         }
                     } else if (strcmp(tokens[1], "stop") == 0) {
                         if (ntok < 3) {
@@ -107,7 +113,6 @@ void ring0_shell()  {
                 kprintf("Official site: <(0b)>wh27961.web4.maze-tech.ru\n");
                 kprintf("Axon team 2025. All rights reserved.\n\n");
                 kprintf("CPU: %s\n", sysinfo_cpu_name());
-                //kprintf("RAM: %d MB\n", sysinfo_ram_mb());
                 kprintf("PC: %s\n", sysinfo_pc_type() ? "BIOS" : "UEFI");
             }
             else if (strcmp(tokens[0], "time") == 0) {
@@ -139,6 +144,12 @@ void ring0_shell()  {
             else if (strcmp(tokens[0], "art") == 0) {
                 ascii_art();
             }
+<<<<<<< HEAD
+            else if (strcmp(tokens[0], "neofetch") == 0) {
+                neofetch_run();
+            }
+=======
+>>>>>>> 4c07fbfd79ea6bc2eb1dda3e1ee7f3b3e5fb0d19
             else if (strcmp(tokens[0], "echo") == 0) {
                 const char* p = input;
                 while (*p == ' ' || *p == '\t') p++;
@@ -158,6 +169,19 @@ void ring0_shell()  {
 }
 
 void ascii_art() {
+<<<<<<< HEAD
+<<<<<<< HEAD
+    kprintf("<(0f)>\n רס‎??????‎סררס‎?‎סררס‎?‎סררס‎??????‎סררס‎???????‎סר<(0b)> רס‎??????‎סר רס‎???????‎סר\n");
+    kprintf("<(0f)>רס‎?‎סררס‎?‎סרס‎?‎סררס‎?‎סרס‎?‎סררס‎?‎סרס‎?‎סררס‎?‎ס<(0b)>רס‎?‎סררס‎?‎סרס‎?‎סר\n");
+    kprintf("<(0f)>רס‎?‎סררס‎?‎סרס‎?‎סררס‎?‎סרס‎?‎סררס‎?‎סרס‎?‎סררס‎?‎ס<(0b)>רס‎?‎סררס‎?‎סרס‎?‎סר\n");
+    kprintf("<(0f)>רס‎????????‎סררס‎??????‎סררס‎?‎סררס‎?‎סרס‎?‎סררס‎?‎ס<(0b)>רס‎?‎סררס‎?‎סררס‎??????‎סר\n");
+    kprintf("<(0f)>רס‎????????‎סררס‎??????‎סררס‎?‎סררס‎?‎סרס‎?‎סררס‎?‎ס<(0b)>רס‎?‎סררס‎?‎סררס‎??????‎סר\n");
+    kprintf("<(0f)>רס‎?‎סררס‎?‎סרס‎?‎סררס‎?‎סרס‎?‎סררס‎?‎סרס‎?‎סררס‎?‎ס<(0b)>רס‎?‎סררס‎?‎סר      רס‎?‎סר\n");
+    kprintf("<(0f)>רס‎?‎סררס‎?‎סרס‎?‎סררס‎?‎סרס‎?‎סררס‎?‎סרס‎?‎סררס‎?‎ס<(0b)>רס‎?‎סררס‎?‎סר      רס‎?‎סר\n");
+    kprintf("<(0f)>רס‎?‎סררס‎?‎סרס‎?‎סררס‎?‎סררס‎??????‎סררס‎?‎סררס‎?‎ס<(0b)>ררס‎??????‎סררס‎???????‎סר\n\n");
+=======
+=======
+>>>>>>> whiterose
     kprintf("<(0f)> \xB0\xB1\xB2\xDB\xDB\xDB\xDB\xDB\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xDB\xDB\xDB\xDB\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xDB\xDB\xDB\xDB\xDB\xDB\xB2\xB1\xB0<(0b)> \xB0\xB1\xB2\xDB\xDB\xDB\xDB\xDB\xDB\xB2\xB1\xB0 \xB0\xB1\xB2\xDB\xDB\xDB\xDB\xDB\xDB\xDB\xB2\xB1\xB0\n");
     kprintf("<(0f)>\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1<(0b)>\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB1\xB2\xDB\xB2\xB1\xB0\n");
     kprintf("<(0f)>\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1<(0b)>\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB1\xB2\xDB\xB2\xB1\xB0\n");
@@ -166,13 +190,16 @@ void ascii_art() {
     kprintf("<(0f)>\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1<(0b)>\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1\xB0      \xB0\xB1\xB2\xDB\xB2\xB1\xB0\n");
     kprintf("<(0f)>\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1<(0b)>\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1\xB0      \xB0\xB1\xB2\xDB\xB2\xB1\xB0\n");
     kprintf("<(0f)>\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xDB\xDB\xDB\xDB\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1<(0b)>\xB0\xB0\xB1\xB2\xDB\xDB\xDB\xDB\xDB\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xDB\xDB\xDB\xDB\xDB\xDB\xB2\xB1\xB0\n\n");
+<<<<<<< HEAD
+>>>>>>> 4c07fbfd79ea6bc2eb1dda3e1ee7f3b3e5fb0d19
+=======
+>>>>>>> whiterose
 }
 
 void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {
     kclear();
     ascii_art();
     kprint("Initializing kernel...\n");
-    /* getting system information */
     sysinfo_init(multiboot_magic, multiboot_info);
 
     gdt_init();

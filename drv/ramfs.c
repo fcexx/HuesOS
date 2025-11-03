@@ -249,6 +249,7 @@ int ramfs_register(void) {
     ramfs_ops.read = ramfs_read;
     ramfs_ops.write = ramfs_write;
     ramfs_ops.release = ramfs_release;
+
     return fs_register_driver(&ramfs_driver);
 }
 

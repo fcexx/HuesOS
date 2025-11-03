@@ -25,3 +25,9 @@ void set_cursor_x(uint16_t x);
 void set_cursor_y(uint16_t y);
 void vga_set_cursor(uint32_t x, uint32_t y);
 void vga_get_cursor(uint32_t* x, uint32_t* y);
+
+/* Fast direct VGA helpers (write directly to video memory) */
+void vga_putch_xy(uint32_t x, uint32_t y, uint8_t ch, uint8_t attr);
+void vga_clear_screen_attr(uint8_t attr);
+void vga_write_str_xy(uint32_t x, uint32_t y, const char *s, uint8_t attr);
+void vga_fill_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint8_t ch, uint8_t attr);

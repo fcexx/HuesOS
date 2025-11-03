@@ -21,6 +21,7 @@
 #include <fs.h>
 #include <ext2.h>
 #include <ramfs.h>
+#include <editor.h>
 
 int exit = 0;
 
@@ -431,6 +432,12 @@ void ring0_shell()  {
             else if (strcmp(tokens[0], "pwd") == 0) {
                 kprintf("%s\n", g_cwd);
             }
+            else if (strcmp(tokens[0], "edit") == 0) {
+                char path[256];
+                if (ntok < 2) resolve_path(g_cwd, "untitled", path, sizeof(path));
+                else resolve_path(g_cwd, tokens[1], path, sizeof(path));
+                editor_run(path);
+            }
             else if (strcmp(tokens[0], "cd") == 0) {
                 if (ntok < 2) { strncpy(g_cwd, "/", sizeof(g_cwd)); }
                 else {
@@ -505,6 +512,30 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {
     asm volatile("sti");
 
     kprintf("kernel base: done (idt, gdt, pic, pit, pci, rtc, paging, heap, keyboard)\n");
+
+    static const char license_text[] =
+"MIT License\n"
+"Copyright (c) 2025 The Axon Team\n\n"
+"Permission is hereby granted, free of charge, to any person obtaining a copy\n"
+"of this software and associated documentation files (the 'Software'), to deal\n"
+"in the Software without restriction, including without limitation the rights\n"
+"to use, copy, modify, merge, publish, distribute, sublicense, and/or sell\n"
+"copies of the Software, and to permit persons to whom the Software is\n"
+"furnished to do so, subject to the following conditions:\n\n"
+"The above copyright notice and this permission notice shall be included in all\n"
+"copies or substantial portions of the Software.\n\n"
+"THE SOFTWARE IS PROVIDED 'AS IS', WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\n"
+"IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\n"
+"FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\n"
+"AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\n"
+"LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\n"
+"OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\n"
+"SOFTWARE.\n";
+    struct fs_file *license_file = fs_create_file("/LICENSE");
+    if (license_file) {
+        fs_write(license_file, license_text, strlen(license_text), 0);
+        fs_file_free(license_file);
+    }
     
     // Показываем текущее время из RTC
     rtc_datetime_t current_time;

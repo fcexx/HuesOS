@@ -7,6 +7,44 @@
 
 static uint8_t parse_color_code(char bg, char fg);
 
+/* Fast direct VGA helpers */
+void vga_putch_xy(uint32_t x, uint32_t y, uint8_t ch, uint8_t attr) {
+    uint8_t *vga = (uint8_t*)VIDEO_ADDRESS;
+    if (x >= MAX_COLS || y >= MAX_ROWS) return;
+    uint32_t off = (y * MAX_COLS + x) * 2;
+    vga[off] = ch;
+    vga[off + 1] = attr;
+}
+
+void vga_clear_screen_attr(uint8_t attr) {
+    uint8_t *vga = (uint8_t*)VIDEO_ADDRESS;
+    uint32_t total = MAX_ROWS * MAX_COLS;
+    for (uint32_t i = 0; i < total; i++) {
+        vga[i*2] = ' ';
+        vga[i*2 + 1] = attr;
+    }
+}
+
+void vga_write_str_xy(uint32_t x, uint32_t y, const char *s, uint8_t attr) {
+    uint8_t *vga = (uint8_t*)VIDEO_ADDRESS;
+    if (y >= MAX_ROWS) return;
+    uint32_t off = (y * MAX_COLS + x) * 2;
+    for (size_t i = 0; s[i] && (x + i) < MAX_COLS; i++) {
+        vga[off + i*2] = (uint8_t)s[i];
+        vga[off + i*2 + 1] = attr;
+    }
+}
+
+void vga_fill_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint8_t ch, uint8_t attr) {
+    for (uint32_t ry = 0; ry < h; ry++) {
+        if (y + ry >= MAX_ROWS) break;
+        for (uint32_t rx = 0; rx < w; rx++) {
+            if (x + rx >= MAX_COLS) break;
+            vga_putch_xy(x + rx, y + ry, ch, attr);
+        }
+    }
+}
+
 void	kprint(uint8_t *str)
 {
 	while (*str)

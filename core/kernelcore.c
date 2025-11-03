@@ -99,6 +99,9 @@ void ring0_shell()  {
                 exit = 1;
                 return;
             }
+            else if (strcmp(tokens[0], "art") == 0) {
+                ascii_art();
+            }
             else if (strcmp(tokens[0], "echo") == 0) {
                 const char* p = input;
                 while (*p == ' ' || *p == '\t') p++;
@@ -117,9 +120,7 @@ void ring0_shell()  {
     }
 }
 
-void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {
-    kclear();
-    
+void ascii_art() {
     kprintf("<(0b)> ∞±≤€€€€€€≤±∞∞±≤€≤±∞∞±≤€≤±∞∞±≤€€€€€€≤±∞∞±≤€€€€€€€≤±∞ ∞±≤€€€€€€≤±∞ ∞±≤€€€€€€€≤±∞\n");
     kprintf("<(0b)>∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞\n");
     kprintf("<(0b)>∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞\n");
@@ -127,7 +128,11 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {
     kprintf("<(0b)>∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±∞      ∞±≤€≤±∞\n");
     kprintf("<(0b)>∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±∞      ∞±≤€≤±∞\n");
     kprintf("<(0b)>∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±∞∞±≤€€€€€€≤±∞∞±≤€≤±∞∞±≤€≤±∞∞±≤€€€€€€≤±∞∞±≤€€€€€€€≤±∞\n\n");
+}
 
+void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {
+    kclear();
+    ascii_art();
     kprint("Initializing kernel...\n");
     /* getting system information */
     sysinfo_init(multiboot_magic, multiboot_info);

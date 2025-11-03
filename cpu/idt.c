@@ -2,6 +2,7 @@
 #include <vga.h>
 #include <pic.h>
 #include <thread.h>
+#include <rtc.h>
 //#include <pit.h>
 #include <stdint.h>
 //#include <thread.h>
@@ -177,6 +178,9 @@ void idt_init() {
         idt_set_handler(8, df_fault_handler);
         // Пометим IST=1 у вектора 8
         idt[8].ist = 1;
+        
+        // Register RTC handler (IRQ 8 = vector 40)
+        idt_set_handler(40, rtc_handler);
         
         asm volatile("lidt %0" : : "m"(idt_ptr));
 }

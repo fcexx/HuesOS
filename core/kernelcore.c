@@ -7,6 +7,7 @@
 #include <idt.h>
 #include <pic.h>
 #include <pit.h>
+#include <rtc.h>
 #include <heap.h>
 #include <paging.h>
 #include <snake.h>
@@ -38,6 +39,9 @@ void ring0_shell()  {
                 kprint("echo <text> - print text\n");
                 kprint("snake - run the snake game\n");
                 kprint("tetris - run the tetris game\n");
+                kprint("time - show current time from RTC\n");
+                kprint("date - show current date from RTC\n");
+                kprint("uptime - show system uptime based on RTC ticks\n");
                 kprint("about - show information about authors and system\n");
                 kprint("exit - exit the shell\n");
             } 
@@ -101,6 +105,28 @@ void ring0_shell()  {
                 //kprintf("RAM: %d MB\n", sysinfo_ram_mb());
                 kprintf("PC: %s\n", sysinfo_pc_type() ? "BIOS" : "UEFI");
             }
+            else if (strcmp(tokens[0], "time") == 0) {
+                rtc_datetime_t dt;
+                rtc_read_datetime(&dt);
+                kprintf("Current time: <(0b)>%02d:%02d:%02d\n", 
+                    dt.hour, dt.minute, dt.second);
+            }
+            else if (strcmp(tokens[0], "date") == 0) {
+                rtc_datetime_t dt;
+                rtc_read_datetime(&dt);
+                kprintf("Current date: <(0b)>%02d/%02d/%d\n", 
+                    dt.day, dt.month, dt.year);
+            }
+            else if (strcmp(tokens[0], "uptime") == 0) {
+                // RTC ticks с частотой 2 Гц (rate=15)
+                uint64_t seconds = rtc_ticks / 2;
+                uint64_t minutes = seconds / 60;
+                uint64_t hours = minutes / 60;
+                seconds %= 60;
+                minutes %= 60;
+                kprintf("System uptime: <(0b)>%llu<(0f)>h <(0b)>%llu<(0f)>m <(0b)>%llu<(0f)>s (RTC ticks: <(0b)>%llu<(0f)>)\n", 
+                    hours, minutes, seconds, rtc_ticks);
+            }
             else if (strcmp(tokens[0], "exit") == 0) {
                 exit = 1;
                 return;
@@ -156,9 +182,21 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {
     iothread_init();
 
     ps2_keyboard_init();
+    
+    // Инициализируем RTC перед включением прерываний
+    rtc_init();
+    
     asm volatile("sti");
 
-    kprintf("kernel base: done (idt, gdt, pic, pit, paging, heap, keyboard)\n");
+    kprintf("kernel base: done (idt, gdt, pic, pit, rtc, paging, heap, keyboard)\n");
+    
+    // Показываем текущее время из RTC
+    rtc_datetime_t current_time;
+    rtc_read_datetime(&current_time);
+    kprintf("Current date and time: %02d/%02d/%d %02d:%02d:%02d\n", 
+        current_time.day, current_time.month, current_time.year,
+        current_time.hour, current_time.minute, current_time.second);
+    
     kprintf("\n<(0f)>Welcome to %s <(0b)>%s<(0f)>!\n", OS_NAME, OS_VERSION);
     kprint("shell: ring0 build-in shell\n");
 

@@ -90,6 +90,7 @@ void ring0_shell()  {
             else if (strcmp(tokens[0], "about") == 0) {
                 kprintf("%s x86_64 version %s (2025)\nAuthors: kotazzz, fcexx, dasteldi, whiterose\n", OS_NAME, OS_VERSION);
                 kprintf("GitHub organization: <(0b)>https://github.com/Axon-company\n");
+                kprintf("Official site: wh27961.web4.maze-tech.ru")
                 kprintf("Axon team 2025. All rights reserved.\n\n");
                 kprintf("CPU: %s\n", sysinfo_cpu_name());
                 //kprintf("RAM: %d MB\n", sysinfo_ram_mb());

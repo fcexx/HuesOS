@@ -18,16 +18,175 @@
 #include <neofetch.h>
 
 #include <iothread.h>
+#include <fs.h>
+#include <ext2.h>
+#include <ramfs.h>
 
 int exit = 0;
+
+static char g_cwd[256] = "/";
+
+static void resolve_path(const char *cwd, const char *arg, char *out, size_t outlen) {
+    if (!arg || arg[0] == '\0') {
+        /* return cwd */
+        strncpy(out, cwd, outlen-1);
+        out[outlen-1] = '\0';
+        return;
+    }
+    if (arg[0] == '/') {
+        strncpy(out, arg, outlen-1);
+        out[outlen-1] = '\0';
+        return;
+    }
+    /* remove leading ./ if present */
+    const char *p = arg;
+    if (p[0] == '.' && p[1] == '/') p += 2;
+    /* build absolute path into tmp then normalize */
+    char tmp[512];
+    if (arg[0] == '\0') {
+        strncpy(tmp, cwd, sizeof(tmp)-1);
+        tmp[sizeof(tmp)-1] = '\0';
+    } else if (arg[0] == '/') {
+        strncpy(tmp, arg, sizeof(tmp)-1);
+        tmp[sizeof(tmp)-1] = '\0';
+    } else {
+        if (strcmp(cwd, "/") == 0) {
+            tmp[0] = '/';
+            size_t n = strlen(p);
+            if (n > sizeof(tmp) - 2) n = sizeof(tmp) - 2;
+            if (n) memcpy(tmp + 1, p, n);
+            tmp[1 + n] = '\0';
+        } else {
+            size_t a = strlen(cwd);
+            if (a > sizeof(tmp) - 2) a = sizeof(tmp) - 2;
+            memcpy(tmp, cwd, a);
+            tmp[a] = '/';
+            size_t n = strlen(p);
+            if (n > sizeof(tmp) - a - 2) n = sizeof(tmp) - a - 2;
+            if (n) memcpy(tmp + a + 1, p, n);
+            tmp[a + 1 + n] = '\0';
+        }
+    }
+    /* normalize tmp into out (handle "." and "..") */
+    /* algorithm: split by '/', push segments, pop on '..' */
+    char **parts = (char**)kmalloc(128);
+    if (!parts) return;
+    int pc = 0;
+    char *s = tmp;
+    /* ensure leading slash */
+    if (*s != '/') {
+        /* make absolute by prepending cwd */
+        char t2[512]; strncpy(t2, tmp, sizeof(t2)-1); t2[sizeof(t2)-1] = '\0';
+        if (strcmp(cwd, "/") == 0) {
+            tmp[0] = '/';
+            size_t n = strlen(t2);
+            if (n > sizeof(tmp) - 2) n = sizeof(tmp) - 2;
+            if (n) memcpy(tmp + 1, t2, n);
+            tmp[1 + n] = '\0';
+        } else {
+            size_t a = strlen(cwd);
+            if (a > sizeof(tmp) - 2) a = sizeof(tmp) - 2;
+            memcpy(tmp, cwd, a);
+            tmp[a] = '/';
+            size_t n = strlen(t2);
+            if (n > sizeof(tmp) - a - 2) n = sizeof(tmp) - a - 2;
+            if (n) memcpy(tmp + a + 1, t2, n);
+            tmp[a + 1 + n] = '\0';
+        }
+        s = tmp;
+    }
+    /* tokenize */
+    s++; /* skip leading slash */
+    while (*s) {
+        char *seg = s;
+        while (*s && *s != '/') s++;
+        size_t len = (size_t)(s - seg);
+        if (len == 0) { if (*s) s++; continue; }
+        char save = seg[len];
+        seg[len] = '\0';
+        if (strcmp(seg, ".") == 0) {
+            /* ignore */
+        } else if (strcmp(seg, "..") == 0) {
+            if (pc > 0) pc--; /* pop */
+        } else {
+            parts[pc++] = seg;
+        }
+        seg[len] = save;
+        if (*s) s++;
+    }
+    /* build output */
+    if (pc == 0) {
+        strncpy(out, "/", outlen-1); out[outlen-1] = '\0';
+    } else {
+        size_t pos = 0;
+        for (int i = 0; i < pc; i++) {
+            size_t need = strlen(parts[i]) + 1; /* '/' + name */
+            if (pos + need >= outlen) break;
+            out[pos++] = '/';
+            size_t n = strlen(parts[i]);
+            memcpy(out + pos, parts[i], n);
+            pos += n;
+        }
+        out[pos] = '\0';
+    }
+    kfree(parts);
+}
+
+static int is_dir_path(const char *path) {
+    struct fs_file *f = fs_open(path);
+    if (!f) return 0;
+    /* If driver explicitly set type, use it */
+    if (f->type == FS_TYPE_DIR) {
+        fs_file_free(f);
+        return 1;
+    }
+    if (f->type == FS_TYPE_REG) {
+        fs_file_free(f);
+        return 0;
+    }
+    /* Fallback: attempt to read directory entries */
+    size_t want = f->size ? f->size : 512;
+    if (want > 8192) want = 8192;
+    void *buf = kmalloc(want + 1);
+    int found = 0;
+    if (buf) {
+        ssize_t r = fs_read(f, buf, want, 0);
+        if (r > 0) {
+            uint32_t off = 0;
+            while ((size_t)off + sizeof(struct ext2_dir_entry) < (size_t)r) {
+                struct ext2_dir_entry *de = (struct ext2_dir_entry *)((uint8_t*)buf + off);
+                if (de->inode != 0 && de->rec_len > 0 && de->name_len > 0 && de->name_len < 255) { found = 1; break; }
+                if (de->rec_len == 0) break;
+                off += de->rec_len;
+            }
+        }
+        kfree(buf);
+    }
+    fs_file_free(f);
+    return found;
+}
 
 void ring0_shell()  {
     static char input_buf[512];
     char *input;
     // build in shell
     for (;;) {
-        kprintf("<(0f)>AxonOS > ");
+        kprintf("%s> ", g_cwd);
         input = kgets(input_buf, 512);
+        /* handle redirection '>' (simple, single redirect) */
+        int redirect = 0;
+        char redir_path[256];
+        char *rp = strchr(input, '>');
+        if (rp) {
+            redirect = 1;
+            *rp = '\0';
+            rp++; /* filename starts here */
+            while (*rp == ' ' || *rp == '\t') rp++;
+            /* copy filename until whitespace or end */
+            size_t i = 0;
+            while (*rp && *rp != ' ' && *rp != '\t' && i + 1 < sizeof(redir_path)) redir_path[i++] = *rp++;
+            redir_path[i] = '\0';
+        }
         int ntok = 0;
         char **tokens = split(input, " ", &ntok);
         if (ntok > 0) { 
@@ -35,6 +194,13 @@ void ring0_shell()  {
                 kprint("Available commands:\n");
                 kprint("help - show available commands\n");
                 kprint("clear, cls - clear the screen\n");
+                kprint("ls [path] - list directory contents\n");
+                kprint("cat <file> - print file contents\n");
+                kprint("cd <path> - change directory\n");
+                kprint("pwd - print working directory\n");
+                kprint("mkdir <dir> - create directory (ramfs)\n");
+                kprint("touch <file> - create empty file (ramfs)\n");
+                kprint("rm <path> - remove file or directory (ramfs)\n");
                 kprint("reboot - reboot the system\n");
                 kprint("shutdown - shutdown the system\n");
                 kprint("echo <text> - print text\n");
@@ -144,12 +310,143 @@ void ring0_shell()  {
             else if (strcmp(tokens[0], "art") == 0) {
                 ascii_art();
             }
-<<<<<<< HEAD
             else if (strcmp(tokens[0], "neofetch") == 0) {
                 neofetch_run();
             }
-=======
->>>>>>> 4c07fbfd79ea6bc2eb1dda3e1ee7f3b3e5fb0d19
+            else if (strcmp(tokens[0], "ls") == 0) {
+                char path[256];
+                if (ntok < 2) resolve_path(g_cwd, "", path, sizeof(path));
+                else resolve_path(g_cwd, tokens[1], path, sizeof(path));
+                struct fs_file *f = fs_open(path);
+                if (!f) { kprintf("<(0c)>ls: cannot access %s\n", path); }
+                else {
+                    size_t want = f->size ? f->size : 4096;
+                    void *buf = kmalloc(want + 1);
+                    if (buf) {
+                        ssize_t r = fs_read(f, buf, want, 0);
+                        if (r > 0) {
+                            uint32_t off = 0;
+                            while ((size_t)off < (size_t)r) {
+                                struct ext2_dir_entry *de = (struct ext2_dir_entry *)((uint8_t*)buf + off);
+                                if (de->inode == 0) break;
+                                int nlen = de->name_len;
+                                if (nlen > 255) nlen = 255;
+                                char name[256];
+                                memcpy(name, (uint8_t*)buf + off + sizeof(*de), nlen);
+                                name[nlen] = '\0';
+                                const char *suffix = (de->file_type == EXT2_FT_DIR) ? "/" : "";
+                                kprintf("%s%s\n", name, suffix);
+                                if (de->rec_len == 0) break;
+                                off += de->rec_len;
+                            }
+                        }
+                        kfree(buf);
+                    }
+                    fs_file_free(f);
+                }
+            }
+            else if (strcmp(tokens[0], "cat") == 0) {
+                if (ntok < 2) { kprint("cat: missing operand\n"); }
+                else {
+                    char path[256];
+                    resolve_path(g_cwd, tokens[1], path, sizeof(path));
+                    struct fs_file *f = fs_open(path);
+                    if (!f) { kprintf("<(0c)>cat: %s: No such file\n", path); }
+                    else {
+                        size_t want = f->size ? f->size : 0;
+                        void *buf = kmalloc(want + 1);
+                        if (buf) {
+                            ssize_t r = fs_read(f, buf, want, 0);
+                            if (r > 0) {
+                                ((char*)buf)[r] = '\0';
+                                kprint((uint8_t*)buf);
+                                kprint("\n");
+                            }
+                            kfree(buf);
+                        }
+                        fs_file_free(f);
+                    }
+                }
+            }
+            else if (strcmp(tokens[0], "echo") == 0) {
+                /* echo supports optional redirection: echo text > file */
+                /* extract rest of input after 'echo' token (original input was modified by split) */
+                const char* p = input;
+                while (*p == ' ' || *p == '\t') p++;
+                const char* word = "echo";
+                while (*p && *word && *p == *word) { p++; word++; }
+                while (*p == ' ' || *p == '\t') p++;
+                /* p now points to text to echo */
+                if (redirect) {
+                    char outpath[256];
+                    resolve_path(g_cwd, redir_path, outpath, sizeof(outpath));
+                    /* strip surrounding quotes if present */
+                    const char *start = p;
+                    const char *end = start + strlen(start);
+                    if (*start == '"' && end > start && *(end-1) == '"') { start++; ((char*)end)[-1] = '\0'; }
+                    /* create or open target */
+                    struct fs_file *f = fs_open(outpath);
+                    if (!f) f = fs_create_file(outpath);
+                    if (!f) { kprintf("<(0c)>echo: cannot create %s\n", outpath); }
+                    else {
+                        ssize_t w = fs_write(f, start, strlen(start), 0);
+                        if (w < 0) kprintf("<(0c)>echo: write failed (err %d)\n", (int)w);
+                        fs_file_free(f);
+                    }
+                } else {
+                    kprint_colorized(p);
+                    kprint("\n");
+                }
+            }
+            else if (strcmp(tokens[0], "mkdir") == 0) {
+                if (ntok < 2) { kprint("mkdir: missing operand\n"); }
+                else {
+                    char path[256];
+                    resolve_path(g_cwd, tokens[1], path, sizeof(path));
+                    int r = ramfs_mkdir(path);
+                    if (r == 0) kprintf("mkdir: created %s\n", path);
+                    else kprintf("<(0c)>mkdir: cannot create %s (err %d)\n", path, r);
+                }
+            }
+            else if (strcmp(tokens[0], "touch") == 0) {
+                if (ntok < 2) { kprint("touch: missing operand\n"); }
+                else {
+                    char path[256];
+                    resolve_path(g_cwd, tokens[1], path, sizeof(path));
+                    struct fs_file *f = fs_create_file(path);
+                    if (!f) kprintf("<(0c)>touch: cannot create %s\n", path);
+                    else { fs_file_free(f); }
+                }
+            }
+            else if (strcmp(tokens[0], "rm") == 0) {
+                if (ntok < 2) { kprint("rm: missing operand\n"); }
+                else {
+                    char path[256];
+                    resolve_path(g_cwd, tokens[1], path, sizeof(path));
+                    int r = ramfs_remove(path);
+                    if (r == 0) kprintf("rm: removed %s\n", path);
+                    else kprintf("<(0c)>rm: cannot remove %s (err %d)\n", path, r);
+                }
+            }
+            else if (strcmp(tokens[0], "pwd") == 0) {
+                kprintf("%s\n", g_cwd);
+            }
+            else if (strcmp(tokens[0], "cd") == 0) {
+                if (ntok < 2) { strncpy(g_cwd, "/", sizeof(g_cwd)); }
+                else {
+                    char path[256];
+                    resolve_path(g_cwd, tokens[1], path, sizeof(path));
+                    if (is_dir_path(path)) {
+                        /* normalize: remove trailing slash unless root */
+                        size_t l = strlen(path);
+                        if (l > 1 && path[l-1] == '/') path[l-1] = '\0';
+                        strncpy(g_cwd, path, sizeof(g_cwd)-1);
+                        g_cwd[sizeof(g_cwd)-1] = '\0';
+                    } else {
+                        kprintf("<(0c)>cd: %s: Not a directory\n", path);
+                    }
+                }
+            }
             else if (strcmp(tokens[0], "echo") == 0) {
                 const char* p = input;
                 while (*p == ' ' || *p == '\t') p++;
@@ -198,6 +495,9 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {
 
     thread_init();
     iothread_init();
+    /* Регистрируем файловую систему */
+    ramfs_register();
+    ext2_register();
 
     ps2_keyboard_init();
     rtc_init();

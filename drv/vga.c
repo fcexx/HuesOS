@@ -282,6 +282,16 @@ void kprintf(const char* fmt, ...)
             continue;
         }
 
+        // support tab character: move to next tab stop (8 columns) like Linux
+        if (*p == '\t') {
+            uint32_t cx = 0, cy = 0;
+            vga_get_cursor(&cx, &cy);
+            uint32_t spaces = 8 - (cx % 8);
+            if (spaces == 0) spaces = 8;
+            kputn(' ', spaces, color);
+            p++; continue;
+        }
+
 		if (*p != '%') { kputchar(*p++, color); continue; }
  		p++;
 		// flags

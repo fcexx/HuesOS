@@ -134,7 +134,7 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {
 
     gdt_init();
     idt_init();
-    pic_init();
+    pic_init(); 
     pit_init();
 
     paging_init();

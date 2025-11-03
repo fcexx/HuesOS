@@ -7,9 +7,12 @@
 #include <idt.h>
 #include <pic.h>
 #include <pit.h>
+#include <rtc.h>
 #include <heap.h>
 #include <paging.h>
 #include <snake.h>
+#include <tetris.h>
+#include <clock.h>
 #include <sysinfo.h>
 #include <thread.h>
 
@@ -36,6 +39,11 @@ void ring0_shell()  {
                 kprint("shutdown - shutdown the system\n");
                 kprint("echo <text> - print text\n");
                 kprint("snake - run the snake game\n");
+                kprint("tetris - run the tetris game\n");
+                kprint("clock - run the analog clock\n");
+                kprint("time - show current time from RTC\n");
+                kprint("date - show current date from RTC\n");
+                kprint("uptime - show system uptime based on RTC ticks\n");
                 kprint("about - show information about authors and system\n");
                 kprint("exit - exit the shell\n");
             } 
@@ -44,6 +52,12 @@ void ring0_shell()  {
             }
             else if (strcmp(tokens[0], "snake") == 0) {
                 snake_run();
+            }
+            else if (strcmp(tokens[0], "tetris") == 0) {
+                tetris_run();
+            }
+            else if (strcmp(tokens[0], "clock") == 0) {
+                clock_run();
             }
             else if (strcmp(tokens[0], "thread") == 0) {
                 if (ntok == 1) {
@@ -96,6 +110,28 @@ void ring0_shell()  {
                 //kprintf("RAM: %d MB\n", sysinfo_ram_mb());
                 kprintf("PC: %s\n", sysinfo_pc_type() ? "BIOS" : "UEFI");
             }
+            else if (strcmp(tokens[0], "time") == 0) {
+                rtc_datetime_t dt;
+                rtc_read_datetime(&dt);
+                kprintf("Current time: <(0b)>%02d:%02d:%02d\n", 
+                    dt.hour, dt.minute, dt.second);
+            }
+            else if (strcmp(tokens[0], "date") == 0) {
+                rtc_datetime_t dt;
+                rtc_read_datetime(&dt);
+                kprintf("Current date: <(0b)>%02d/%02d/%d\n", 
+                    dt.day, dt.month, dt.year);
+            }
+            else if (strcmp(tokens[0], "uptime") == 0) {
+                // RTC ticks —Å —á–∞—Å—Ç–æ—Ç–æ–π 2 –ì—Ü (rate=15)
+                uint64_t seconds = rtc_ticks / 2;
+                uint64_t minutes = seconds / 60;
+                uint64_t hours = minutes / 60;
+                seconds %= 60;
+                minutes %= 60;
+                kprintf("System uptime: <(0b)>%llu<(0f)>h <(0b)>%llu<(0f)>m <(0b)>%llu<(0f)>s (RTC ticks: <(0b)>%llu<(0f)>)\n", 
+                    hours, minutes, seconds, rtc_ticks);
+            }
             else if (strcmp(tokens[0], "exit") == 0) {
                 exit = 1;
                 return;
@@ -122,14 +158,14 @@ void ring0_shell()  {
 }
 
 void ascii_art() {
-    kprintf("<(0f)>\n ∞±≤€€€€€€≤±∞∞±≤€≤±∞∞±≤€≤±∞∞±≤€€€€€€≤±∞∞±≤€€€€€€€≤±∞<(0b)> ∞±≤€€€€€€≤±∞ ∞±≤€€€€€€€≤±∞\n");
-    kprintf("<(0f)>∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±<(0b)>∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞\n");
-    kprintf("<(0f)>∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±<(0b)>∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞\n");
-    kprintf("<(0f)>∞±≤€€€€€€€€≤±∞∞±≤€€€€€€≤±∞∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±<(0b)>∞±≤€≤±∞∞±≤€≤±∞∞±≤€€€€€€≤±∞\n");
-    kprintf("<(0f)>∞±≤€€€€€€€€≤±∞∞±≤€€€€€€≤±∞∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±<(0b)>∞±≤€≤±∞∞±≤€≤±∞∞±≤€€€€€€≤±∞\n");
-    kprintf("<(0f)>∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±<(0b)>∞±≤€≤±∞∞±≤€≤±∞      ∞±≤€≤±∞\n");
-    kprintf("<(0f)>∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±<(0b)>∞±≤€≤±∞∞±≤€≤±∞      ∞±≤€≤±∞\n");
-    kprintf("<(0f)>∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±∞∞±≤€€€€€€≤±∞∞±≤€≤±∞∞±≤€≤±<(0b)>∞∞±≤€€€€€€≤±∞∞±≤€€€€€€€≤±∞\n\n");
+    kprintf("<(0f)> \xB0\xB1\xB2\xDB\xDB\xDB\xDB\xDB\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xDB\xDB\xDB\xDB\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xDB\xDB\xDB\xDB\xDB\xDB\xB2\xB1\xB0<(0b)> \xB0\xB1\xB2\xDB\xDB\xDB\xDB\xDB\xDB\xB2\xB1\xB0 \xB0\xB1\xB2\xDB\xDB\xDB\xDB\xDB\xDB\xDB\xB2\xB1\xB0\n");
+    kprintf("<(0f)>\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1<(0b)>\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB1\xB2\xDB\xB2\xB1\xB0\n");
+    kprintf("<(0f)>\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1<(0b)>\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB1\xB2\xDB\xB2\xB1\xB0\n");
+    kprintf("<(0f)>\xB0\xB1\xB2\xDB\xDB\xDB\xDB\xDB\xDB\xDB\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xDB\xDB\xDB\xDB\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1<(0b)>\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xDB\xDB\xDB\xDB\xDB\xB2\xB1\xB0\n");
+    kprintf("<(0f)>\xB0\xB1\xB2\xDB\xDB\xDB\xDB\xDB\xDB\xDB\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xDB\xDB\xDB\xDB\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1<(0b)>\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xDB\xDB\xDB\xDB\xDB\xB2\xB1\xB0\n");
+    kprintf("<(0f)>\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1<(0b)>\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1\xB0      \xB0\xB1\xB2\xDB\xB2\xB1\xB0\n");
+    kprintf("<(0f)>\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1<(0b)>\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1\xB0      \xB0\xB1\xB2\xDB\xB2\xB1\xB0\n");
+    kprintf("<(0f)>\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xDB\xDB\xDB\xDB\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1<(0b)>\xB0\xB0\xB1\xB2\xDB\xDB\xDB\xDB\xDB\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xDB\xDB\xDB\xDB\xDB\xDB\xB2\xB1\xB0\n\n");
 }
 
 void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {
@@ -151,9 +187,21 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {
     iothread_init();
 
     ps2_keyboard_init();
+    
+    // –ò–Ω–∏—Ü–∏–∞–ª–∏–∑–∏—Ä—É–µ–º RTC –ø–µ—Ä–µ–¥ –≤–∫–ª—é—á–µ–Ω–∏–µ–º –ø—Ä–µ—Ä—ã–≤–∞–Ω–∏–π
+    rtc_init();
+    
     asm volatile("sti");
 
-    kprintf("kernel base: done (idt, gdt, pic, pit, paging, heap, keyboard)\n");
+    kprintf("kernel base: done (idt, gdt, pic, pit, rtc, paging, heap, keyboard)\n");
+    
+    // –ü–æ–∫–∞–∑—ã–≤–∞–µ–º —Ç–µ–∫—É—â–µ–µ –≤—Ä–µ–º—è –∏–∑ RTC
+    rtc_datetime_t current_time;
+    rtc_read_datetime(&current_time);
+    kprintf("Current date and time: %02d/%02d/%d %02d:%02d:%02d\n", 
+        current_time.day, current_time.month, current_time.year,
+        current_time.hour, current_time.minute, current_time.second);
+    
     kprintf("\n<(0f)>Welcome to %s <(0b)>%s<(0f)>!\n", OS_NAME, OS_VERSION);
     kprint("shell: ring0 build-in shell\n");
 

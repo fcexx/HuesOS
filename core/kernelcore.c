@@ -190,13 +190,11 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {
     iothread_init();
 
     ps2_keyboard_init();
-    
-    // Инициализируем RTC перед включением прерываний
     rtc_init();
     
     asm volatile("sti");
 
-    kprintf("kernel base: done (idt, gdt, pic, pit, rtc, paging, heap, keyboard)\n");
+    kprintf("kernel base: done (idt, gdt, pic, pit, pci, rtc, paging, heap, keyboard)\n");
     
     // Показываем текущее время из RTC
     rtc_datetime_t current_time;

@@ -183,6 +183,9 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {
     paging_init();
     heap_init(0, 0);
 
+    pci_init();
+    pci_dump_devices();
+
     thread_init();
     iothread_init();
 

@@ -12,6 +12,7 @@
 #include <paging.h>
 #include <snake.h>
 #include <tetris.h>
+#include <clock.h>
 #include <sysinfo.h>
 #include <thread.h>
 
@@ -39,6 +40,7 @@ void ring0_shell()  {
                 kprint("echo <text> - print text\n");
                 kprint("snake - run the snake game\n");
                 kprint("tetris - run the tetris game\n");
+                kprint("clock - run the analog clock\n");
                 kprint("time - show current time from RTC\n");
                 kprint("date - show current date from RTC\n");
                 kprint("uptime - show system uptime based on RTC ticks\n");
@@ -53,6 +55,9 @@ void ring0_shell()  {
             }
             else if (strcmp(tokens[0], "tetris") == 0) {
                 tetris_run();
+            }
+            else if (strcmp(tokens[0], "clock") == 0) {
+                clock_run();
             }
             else if (strcmp(tokens[0], "thread") == 0) {
                 if (ntok == 1) {

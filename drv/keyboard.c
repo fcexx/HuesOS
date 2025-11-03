@@ -63,20 +63,6 @@ static const char scancode_to_ascii_shift[128] = {
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 };
 
-// Специальные коды для стрелок и других клавиш
-#define KEY_UP         0x80
-#define KEY_DOWN   0x81
-#define KEY_LEFT   0x82
-#define KEY_RIGHT  0x83
-#define KEY_HOME   0x84
-#define KEY_END        0x85
-#define KEY_PGUP   0x86
-#define KEY_PGDN   0x87
-#define KEY_INSERT 0x88
-#define KEY_DELETE 0x89
-#define KEY_TAB         0x8A
-#define KEY_ESC        0x8B
-
 // Флаги состояния клавиатуры
 static volatile bool shift_pressed = false;
 static volatile bool ctrl_pressed = false;
@@ -126,7 +112,11 @@ void keyboard_handler(cpu_registers_t* regs) {
 }
 
 // Обработка одного байта сканкода (вынесена для возможности polling из PIT)
+// Temporary debug: print scancodes to serial to trace keyboard behavior
+#include <debug.h>
+
 void keyboard_process_scancode(uint8_t scancode) {
+    qemu_debug_printf("kbd: scancode=0x%02x\n", scancode);
         // Обрабатываем только нажатие клавиш (не отпускание)
         if (scancode & 0x80) {
                 // Клавиша отпущена
@@ -200,6 +190,14 @@ void keyboard_process_scancode(uint8_t scancode) {
                         if (scancode < 128) {
                                 char c = shift_pressed ? scancode_to_ascii_shift[scancode] : scancode_to_ascii[scancode];
                                 if (c != 0) {
+                                        // Обработка Ctrl-комбинаций: Ctrl+A..Z -> 0x01..0x1A
+                                        if (ctrl_pressed) {
+                                                unsigned char uc = (unsigned char)c;
+                                                if (uc >= 'a' && uc <= 'z') uc = (unsigned char)(uc - 'a' + 'A');
+                                                if (uc >= 'A' && uc <= 'Z') {
+                                                        c = (char)(uc - 'A' + 1);
+                                                }
+                                        }
                                         add_to_buffer(c);
                                         //qemu_debug_printf("kbd: char '%c' (0x%02x) -> buffer_count=%d\n", c, (unsigned char)c, buffer_count);
                                 }

@@ -90,6 +90,7 @@ void ring0_shell()  {
             else if (strcmp(tokens[0], "about") == 0) {
                 kprintf("%s x86_64 version %s (2025)\nAuthors: kotazzz, fcexx, dasteldi, whiterose\n", OS_NAME, OS_VERSION);
                 kprintf("GitHub organization: <(0b)>https://github.com/Axon-company\n");
+                kprintf("Official site: <(0b)>wh27961.web4.maze-tech.ru\n");
                 kprintf("Axon team 2025. All rights reserved.\n\n");
                 kprintf("CPU: %s\n", sysinfo_cpu_name());
                 //kprintf("RAM: %d MB\n", sysinfo_ram_mb());
@@ -98,6 +99,9 @@ void ring0_shell()  {
             else if (strcmp(tokens[0], "exit") == 0) {
                 exit = 1;
                 return;
+            }
+            else if (strcmp(tokens[0], "art") == 0) {
+                ascii_art();
             }
             else if (strcmp(tokens[0], "echo") == 0) {
                 const char* p = input;
@@ -117,17 +121,20 @@ void ring0_shell()  {
     }
 }
 
+void ascii_art() {
+    kprintf("<(0f)>\n ∞±≤€€€€€€≤±∞∞±≤€≤±∞∞±≤€≤±∞∞±≤€€€€€€≤±∞∞±≤€€€€€€€≤±∞<(0b)> ∞±≤€€€€€€≤±∞ ∞±≤€€€€€€€≤±∞\n");
+    kprintf("<(0f)>∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±<(0b)>∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞\n");
+    kprintf("<(0f)>∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±<(0b)>∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞\n");
+    kprintf("<(0f)>∞±≤€€€€€€€€≤±∞∞±≤€€€€€€≤±∞∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±<(0b)>∞±≤€≤±∞∞±≤€≤±∞∞±≤€€€€€€≤±∞\n");
+    kprintf("<(0f)>∞±≤€€€€€€€€≤±∞∞±≤€€€€€€≤±∞∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±<(0b)>∞±≤€≤±∞∞±≤€≤±∞∞±≤€€€€€€≤±∞\n");
+    kprintf("<(0f)>∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±<(0b)>∞±≤€≤±∞∞±≤€≤±∞      ∞±≤€≤±∞\n");
+    kprintf("<(0f)>∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±<(0b)>∞±≤€≤±∞∞±≤€≤±∞      ∞±≤€≤±∞\n");
+    kprintf("<(0f)>∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±∞∞±≤€€€€€€≤±∞∞±≤€≤±∞∞±≤€≤±<(0b)>∞∞±≤€€€€€€≤±∞∞±≤€€€€€€€≤±∞\n\n");
+}
+
 void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {
     kclear();
-    
-    kprintf("<(0b)> ∞±≤€€€€€€≤±∞∞±≤€≤±∞∞±≤€≤±∞∞±≤€€€€€€≤±∞∞±≤€€€€€€€≤±∞ ∞±≤€€€€€€≤±∞ ∞±≤€€€€€€€≤±∞\n");
-    kprintf("<(0b)>∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞\n");
-    kprintf("<(0b)>∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞\n");
-    kprintf("<(0b)>∞±≤€€€€€€€€≤±∞∞±≤€€€€€€≤±∞∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±∞∞±≤€€€€€€≤±∞\n");
-    kprintf("<(0b)>∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±∞      ∞±≤€≤±∞\n");
-    kprintf("<(0b)>∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±∞      ∞±≤€≤±∞\n");
-    kprintf("<(0b)>∞±≤€≤±∞∞±≤€≤±∞±≤€≤±∞∞±≤€≤±∞∞±≤€€€€€€≤±∞∞±≤€≤±∞∞±≤€≤±∞∞±≤€€€€€€≤±∞∞±≤€€€€€€€≤±∞\n\n");
-
+    ascii_art();
     kprint("Initializing kernel...\n");
     /* getting system information */
     sysinfo_init(multiboot_magic, multiboot_info);

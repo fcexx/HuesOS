@@ -121,33 +121,37 @@ void ring0_shell()  {
 void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {
     kclear();
     
-    kprintf("    ___                  _____ _____ \n");
-    kprintf("   / _ \\                |  _  /  ___|\n");
-    kprintf("  / /_\\ \\_  _____  _  | | | \\ `--. \n");
-    kprintf("  |  _  \\ \\/ / _ \\| '_ \\| | | |`--. \\\n");
-    kprintf("  | | | |>  < (_) | | | \\ \\_/ /\\__/ /\n");
-    kprintf("  \\_| |_/_/\\_\\___/|_| |_|\\___/\\____/\n");
-    kprintf("\n");
+    kprintf("<(0b)> רס‎??????‎סררס‎?‎סררס‎?‎סררס‎??????‎סררס‎???????‎סר רס‎??????‎סר רס‎???????‎סר\n");
+    kprintf("<(0b)>רס‎?‎סררס‎?‎סרס‎?‎סררס‎?‎סרס‎?‎סררס‎?‎סרס‎?‎סררס‎?‎סרס‎?‎סררס‎?‎סרס‎?‎סר\n");
+    kprintf("<(0b)>רס‎?‎סררס‎?‎סרס‎?‎סררס‎?‎סרס‎?‎סררס‎?‎סרס‎?‎סררס‎?‎סרס‎?‎סררס‎?‎סרס‎?‎סר\n");
+    kprintf("<(0b)>רס‎????????‎סררס‎??????‎סררס‎?‎סררס‎?‎סרס‎?‎סררס‎?‎סרס‎?‎סררס‎?‎סררס‎??????‎סר\n");
+    kprintf("<(0b)>רס‎?‎סררס‎?‎סרס‎?‎סררס‎?‎סרס‎?‎סררס‎?‎סרס‎?‎סררס‎?‎סרס‎?‎סררס‎?‎סר      רס‎?‎סר\n");
+    kprintf("<(0b)>רס‎?‎סררס‎?‎סרס‎?‎סררס‎?‎סרס‎?‎סררס‎?‎סרס‎?‎סררס‎?‎סרס‎?‎סררס‎?‎סר      רס‎?‎סר\n");
+    kprintf("<(0b)>רס‎?‎סררס‎?‎סרס‎?‎סררס‎?‎סררס‎??????‎סררס‎?‎סררס‎?‎סררס‎??????‎סררס‎???????‎סר\n\n");
 
     kprint("Initializing kernel...\n");
+    /* getting system information */
     sysinfo_init(multiboot_magic, multiboot_info);
+
     gdt_init();
     idt_init();
     pic_init();
     pit_init();
+
     paging_init();
     heap_init(0, 0);
+
     thread_init();
     iothread_init();
+
     ps2_keyboard_init();
     asm volatile("sti");
 
     kprintf("kernel base: done (idt, gdt, pic, pit, paging, heap, keyboard)\n");
     kprintf("\n<(0f)>Welcome to %s <(0b)>%s<(0f)>!\n", OS_NAME, OS_VERSION);
-    kprint("Shell: HuesSH ring0\n");
-    kprint("Type \"help\" to show available commands\n");
+    kprint("shell: ring0 build-in shell\n");
 
-    ring0_shell();
+    ring0_shell();  
 
     kprint("\nShutting down in 5 seconds...");
     pit_sleep_ms(5000);

@@ -86,7 +86,7 @@ static void gp_fault_handler(cpu_registers_t* regs){
         // Строгая семантика для POSIX-подобного поведения: никаких эмуляций в ring3.
         // General Protection Fault в пользовательском процессе рассматривается как фатальная ошибка процесса.
         if ((regs->cs & 3) == 3) {
-                kprint("USER GENERAL PROTECTION FAULT\n");
+                kprintf("<(0c)>\nUser General Protection Fault.\nRIP: %016x\nCODE: %u\nFLAGS: %x\n", regs->rip, regs->error_code, regs->rflags);
                 asm volatile("sti; hlt" ::: "memory");
                 (void)regs;
         }

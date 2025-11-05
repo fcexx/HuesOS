@@ -64,9 +64,13 @@ static int ext2_create(const char *path, struct fs_file **out_file) {
 }
 
 static int ext2_open(const char *path, struct fs_file **out_file) {
-    if (!g_mount) return -2; /* mounted not ready */
+    if (!g_mount) return -1; /* not handled if not mounted */
     if (!path || path[0] != '/') return -1; /* not handled */
-    const char *name = path + 1;
+    /* Mount namespace: handle only under /ext2 path */
+    if (strncmp(path, "/ext2", 5) != 0 || (path[5] != '\0' && path[5] != '/')) {
+        return -1; /* not our path */
+    }
+    const char *name = (path[5] == '\0') ? "" : (path + 6);
     uint32_t inode_no = 2; /* root */
     if (name[0] == '\0') {
         /* open root directory as a file handle */
@@ -101,7 +105,7 @@ static int ext2_open(const char *path, struct fs_file **out_file) {
                 off += de->rec_len;
             }
         }
-        return -3; /* not found */
+        return -1; /* not handled/not found under ext2 root */
 found_inode: ;
     }
     /* load inode */

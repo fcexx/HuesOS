@@ -5,6 +5,7 @@
 #include "../inc/fs.h"
 #include "../inc/string.h"
 #include "../inc/heap.h"
+#include "../inc/axosh.h"
 #include <stdint.h>
 
 // ---- UI layout ----
@@ -35,13 +36,20 @@ static uint8_t g_attr_status = 0x70;
 static uint8_t g_attr_text = 0x0F;
 static uint8_t g_attr_text_dim = 0x07;
 
+// View cache to avoid flicker (only update changed cells)
+static uint16_t g_view_cache[VIEW_H][VIEW_W];
+static int g_view_cache_valid = 0;
+
+static inline void view_cache_invalidate(void) { g_view_cache_valid = 0; }
+
 static void apply_theme(int idx) {
 	if (idx < 0) idx = 0; if (idx >= THEME_COUNT) idx = THEME_COUNT - 1;
 	g_theme_index = idx;
 	g_attr_menu = THEMES[idx].menu_attr;
 	g_attr_status = THEMES[idx].status_attr;
 	g_attr_text = THEMES[idx].text_attr;
-	g_attr_text_dim = THEMES[idx].text_dim_attr;
+    g_attr_text_dim = THEMES[idx].text_dim_attr;
+    view_cache_invalidate();
 }
 
 static void cycle_theme(void) { int ni = g_theme_index + 1; if (ni >= THEME_COUNT) ni = 0; apply_theme(ni); }
@@ -65,6 +73,7 @@ typedef struct {
 	int modified;
 
 	char filename[256];
+    int syntax_mode; // 0 - none, 1 - asm
 } Editor;
 
 static void ui_draw_menu(void);
@@ -89,6 +98,10 @@ static int prompt_input(const char *title, char *out, int out_size, const char *
 static int file_load(Editor *E, const char *path);
 static int file_save(Editor *E, const char *path);
 
+// ---- Syntax highlighting (ASM) ----
+static void editor_update_syntax(Editor *E);
+static void draw_line_text_asm(uint32_t y, const char *s, size_t len);
+
 // ---- Buffer management ----
 static void buf_init(Editor *E) {
 	E->lines = (Line*)kcalloc(16, sizeof(Line));
@@ -100,6 +113,7 @@ static void buf_init(Editor *E) {
 	E->insert_mode = 1;
 	E->modified = 0;
 	E->filename[0] = '\0';
+    E->syntax_mode = 0;
 	E->lines[0].data = (char*)kcalloc(64, 1);
 	E->lines[0].len = 0;
 	E->lines[0].cap = 64;
@@ -272,27 +286,169 @@ static void ui_draw_status(Editor *E, const char *msg) {
 static void draw_line_text(uint32_t y, const char *s, size_t len) {
 	// draw line content truncated/padded to width
 	uint32_t x = 0;
-	for (; x < VIEW_W && x < (uint32_t)len; x++) vga_putch_xy(x, y, (uint8_t)s[x], g_attr_text);
-	for (; x < VIEW_W; x++) vga_putch_xy(x, y, ' ', g_attr_text);
+    if (!g_view_cache_valid) { for (uint32_t iy=0; iy<VIEW_H; iy++) for (uint32_t ix=0; ix<VIEW_W; ix++) g_view_cache[iy][ix]=0xFFFF; g_view_cache_valid=1; }
+    for (; x < VIEW_W && x < (uint32_t)len; x++) {
+        uint16_t v = ((uint16_t)g_attr_text << 8) | (uint8_t)s[x];
+        uint32_t iy = y - VIEW_Y0; if (iy < VIEW_H) {
+            if (g_view_cache[iy][x] != v) { vga_putch_xy(x, y, (uint8_t)s[x], g_attr_text); g_view_cache[iy][x] = v; }
+        } else {
+            vga_putch_xy(x, y, (uint8_t)s[x], g_attr_text);
+        }
+    }
+    for (; x < VIEW_W; x++) {
+        uint16_t v = ((uint16_t)g_attr_text << 8) | (uint8_t)' ';
+        uint32_t iy = y - VIEW_Y0; if (iy < VIEW_H) {
+            if (g_view_cache[iy][x] != v) { vga_putch_xy(x, y, ' ', g_attr_text); g_view_cache[iy][x] = v; }
+        } else {
+            vga_putch_xy(x, y, ' ', g_attr_text);
+        }
+    }
 }
 
 static void ui_draw_view(Editor *E) {
-	// clear view area
-	for (uint32_t i = 0; i < VIEW_H; i++) draw_line_text(VIEW_Y0 + i, "", 0);
 	// draw visible buffer lines
 	for (int i = 0; i < VIEW_H; i++) {
 		int r = E->view_top + i;
 		if (r >= 0 && r < E->line_count) {
 			Line *L = &E->lines[r];
-			draw_line_text(VIEW_Y0 + (uint32_t)i, L->data ? L->data : "", L->len);
+			if (E->syntax_mode == 1) draw_line_text_asm(VIEW_Y0 + (uint32_t)i, L->data ? L->data : "", L->len);
+			else draw_line_text(VIEW_Y0 + (uint32_t)i, L->data ? L->data : "", L->len);
 		} else {
 			// beyond EOF -> dim tildes like vim
 			if (r >= E->line_count) {
-				vga_putch_xy(0, VIEW_Y0 + (uint32_t)i, '~', g_attr_text_dim);
-				for (uint32_t x=1;x<VIEW_W;x++) vga_putch_xy(x, VIEW_Y0 + (uint32_t)i, ' ', g_attr_text);
+                uint32_t y = VIEW_Y0 + (uint32_t)i;
+                if (!g_view_cache_valid) { for (uint32_t iy=0; iy<VIEW_H; iy++) for (uint32_t ix=0; ix<VIEW_W; ix++) g_view_cache[iy][ix]=0xFFFF; g_view_cache_valid=1; }
+                // draw '~' at x=0
+                uint16_t v0 = ((uint16_t)g_attr_text_dim << 8) | (uint8_t)'~';
+                if (g_view_cache[i][0] != v0) { vga_putch_xy(0, y, '~', g_attr_text_dim); g_view_cache[i][0] = v0; }
+                for (uint32_t x=1;x<VIEW_W;x++) {
+                    uint16_t v = ((uint16_t)g_attr_text << 8) | (uint8_t)' ';
+                    if (g_view_cache[i][x] != v) { vga_putch_xy(x, y, ' ', g_attr_text); g_view_cache[i][x] = v; }
+                }
 			}
 		}
 	}
+}
+
+// -------- Syntax detection and drawing (ASM) --------
+static int str_ends_with(const char* s, const char* suf) {
+    size_t ls = strlen(s), le = strlen(suf);
+    if (le > ls) return 0;
+    return (strncmp(s + ls - le, suf, le) == 0);
+}
+
+static void editor_update_syntax(Editor *E) {
+    E->syntax_mode = 0;
+    if (E->filename[0]) {
+        if (str_ends_with(E->filename, ".asm") || str_ends_with(E->filename, ".ASM") ||
+            str_ends_with(E->filename, ".s")   || str_ends_with(E->filename, ".S")) {
+            E->syntax_mode = 1; // ASM
+        }
+    }
+}
+
+static inline uint8_t attr_with_fg(uint8_t base_attr, uint8_t fg) {
+    return (uint8_t)((base_attr & 0xF0) | (fg & 0x0F));
+}
+
+static int is_ident_char(char c) { return (c=='_' || (c>='0'&&c<='9') || (c>='a'&&c<='z') || (c>='A'&&c<='Z')); }
+
+static int is_hex_prefix(const char* s, size_t i, size_t len) {
+    return (i+1 < len && s[i]=='0' && (s[i+1]=='x' || s[i+1]=='X'));
+}
+
+static int is_number_start(const char* s, size_t i, size_t len) {
+    if (i < len && (s[i]>='0' && s[i]<='9')) return 1;
+    if (is_hex_prefix(s,i,len)) return 1;
+    return 0;
+}
+
+static int token_eq(const char* s, size_t start, size_t end, const char* kw) {
+    size_t L = end - start; size_t K = strlen(kw); if (L != K) return 0;
+    for (size_t i=0;i<K;i++) { char a=s[start+i], b=kw[i]; if (a>='A'&&a<='Z') a=(char)(a-'A'+'a'); if (b>='A'&&b<='Z') b=(char)(b-'A'+'a'); if (a!=b) return 0; }
+    return 1;
+}
+
+static int is_asm_mnemonic(const char* s, size_t st, size_t en) {
+    static const char* K[] = {
+        "mov","add","sub","mul","imul","div","idiv","and","or","xor","not","neg",
+        "push","pop","pushf","popf","lea","cmp","test","inc","dec","shl","shr","sar","rol","ror",
+        "jmp","je","jne","jg","jge","jl","jle","ja","jb","call","ret","int","nop","hlt","sti","cli"
+    };
+    for (size_t i=0;i<sizeof(K)/sizeof(K[0]);i++) if (token_eq(s,st,en,K[i])) return 1; return 0;
+}
+
+static int is_asm_register(const char* s, size_t st, size_t en) {
+    static const char* R[] = {
+        "al","ah","ax","eax","rax","bl","bh","bx","ebx","rbx","cl","ch","cx","ecx","rcx",
+        "dl","dh","dx","edx","rdx","si","esi","rsi","di","edi","rdi","bp","ebp","rbp","sp","esp","rsp",
+        "cs","ds","es","ss","fs","gs"
+    };
+    for (size_t i=0;i<sizeof(R)/sizeof(R[0]);i++) if (token_eq(s,st,en,R[i])) return 1; return 0;
+}
+
+static int is_asm_directive(const char* s, size_t st, size_t en) {
+    if (s[st]=='.') return 1;
+    static const char* D[] = {"db","dw","dd","dq","dt","section","global","extern","equ","org"};
+    for (size_t i=0;i<sizeof(D)/sizeof(D[0]);i++) if (token_eq(s,st,en,D[i])) return 1; return 0;
+}
+
+static void draw_line_text_asm(uint32_t y, const char *s, size_t len) {
+    uint8_t attr_norm = g_attr_text;
+    uint8_t attr_cmt  = attr_with_fg(g_attr_text, 0x02); // green
+    uint8_t attr_lbl  = attr_with_fg(g_attr_text, 0x0E); // yellow
+    uint8_t attr_mn   = attr_with_fg(g_attr_text, 0x0B); // cyan
+    uint8_t attr_reg  = attr_with_fg(g_attr_text, 0x0D); // magenta
+    uint8_t attr_num  = attr_with_fg(g_attr_text, 0x0C); // red
+    uint8_t attr_str  = attr_with_fg(g_attr_text, 0x0A); // light green
+
+    uint32_t x = 0; size_t i = 0; int in_str = 0; char str_quote = 0;
+    if (!g_view_cache_valid) { for (uint32_t iy=0; iy<VIEW_H; iy++) for (uint32_t ix=0; ix<VIEW_W; ix++) g_view_cache[iy][ix]=0xFFFF; g_view_cache_valid=1; }
+    while (x < VIEW_W) {
+        if (i >= len) { vga_putch_xy(x++, y, ' ', attr_norm); continue; }
+        char c = s[i];
+        if (!in_str && c == ';') { // comment until end of line
+            for (; x < VIEW_W && i < len; i++, x++) {
+                uint16_t v = ((uint16_t)attr_cmt<<8) | (uint8_t)s[i];
+                uint32_t iy = y - VIEW_Y0; if (iy < VIEW_H && g_view_cache[iy][x] == v) continue; vga_putch_xy(x,y,(uint8_t)s[i],attr_cmt); if (iy<VIEW_H) g_view_cache[iy][x]=v;
+            }
+            break;
+        }
+        if (!in_str && (c=='\'' || c=='"')) { in_str = 1; str_quote=c; vga_putch_xy(x++, y, (uint8_t)c, attr_str); i++; continue; }
+        if (in_str) {
+            uint16_t v = ((uint16_t)attr_str<<8)|(uint8_t)c; uint32_t iy=y-VIEW_Y0; if (iy<VIEW_H && g_view_cache[iy][x]==v) { x++; i++; } else { vga_putch_xy(x++,y,(uint8_t)c,attr_str); if (iy<VIEW_H) g_view_cache[iy][x-1]=v; i++; }
+            if (c == str_quote) in_str = 0;
+            continue;
+        }
+        // common punctuation
+        if (c==' ' || c=='\t' || c==',' || c=='+' || c=='-' || c=='/' || c=='[' || c==']' || c=='(' || c==')' || c=='*') {
+            uint16_t v = ((uint16_t)attr_norm<<8)|(uint8_t)c; uint32_t iy=y-VIEW_Y0; if (iy<VIEW_H && g_view_cache[iy][x]==v) { x++; i++; } else { vga_putch_xy(x++,y,(uint8_t)c,attr_norm); if (iy<VIEW_H) g_view_cache[iy][x-1]=v; i++; } continue;
+        }
+        // dot-directive: .section, .globl etc.
+        if (c=='.') {
+            size_t st = i; i++; while (i < len && is_ident_char(s[i])) i++; size_t en = i;
+            for (size_t j=st;j<en && x<VIEW_W;j++,x++) { uint16_t v=((uint16_t)attr_mn<<8)|(uint8_t)s[j]; uint32_t iy=y-VIEW_Y0; if (iy<VIEW_H && g_view_cache[iy][x]==v) continue; vga_putch_xy(x,y,(uint8_t)s[j],attr_mn); if (iy<VIEW_H) g_view_cache[iy][x]=v; }
+            continue;
+        }
+        // token
+        size_t st = i; while (i < len && is_ident_char(s[i])) i++;
+        size_t en = i;
+        if (en == st) { // not an identifier - output raw char to avoid infinite loop
+            uint16_t v=((uint16_t)attr_norm<<8)|(uint8_t)s[i]; uint32_t iy=y-VIEW_Y0; if (iy<VIEW_H && g_view_cache[iy][x]==v) { x++; i++; } else { vga_putch_xy(x++,y,(uint8_t)s[i],attr_norm); if (iy<VIEW_H) g_view_cache[iy][x-1]=v; i++; } continue;
+        }
+        uint8_t a = attr_norm;
+        if (en>st && s[en-1]==':') { // label like 'start:'
+            en--; a = attr_lbl; // draw token without ':' then draw ':'
+            for (size_t j=st;j<en && x<VIEW_W;j++,x++) vga_putch_xy(x,y,(uint8_t)s[j],a);
+            if (x<VIEW_W) { vga_putch_xy(x++,y,':',a); }
+            continue;
+        }
+        if (is_asm_mnemonic(s,st,en)) a = attr_mn;
+        else if (is_asm_register(s,st,en)) a = attr_reg;
+        else if (is_asm_directive(s,st,en)) a = attr_mn;
+        else if (is_number_start(s,st,len)) a = attr_num;
+        for (size_t j=st;j<en && x<VIEW_W;j++,x++) { uint16_t v=((uint16_t)a<<8)|(uint8_t)s[j]; uint32_t iy=y-VIEW_Y0; if (iy<VIEW_H && g_view_cache[iy][x]==v) continue; vga_putch_xy(x,y,(uint8_t)s[j],a); if (iy<VIEW_H) g_view_cache[iy][x]=v; }
+    }
 }
 
 static void ensure_cursor_visible(Editor *E) {
@@ -420,15 +576,25 @@ static int prompt_input(const char *title, char *out, int out_size, const char *
 static int file_load(Editor *E, const char *path) {
 	struct fs_file *f = fs_open(path);
 	if (!f) return -1;
-	char *buf = 0;
-	size_t sz = f->size;
-	if (sz > 0) {
-		buf = (char*)kmalloc(sz + 1);
-		if (!buf) { fs_file_free(f); return -1; }
-		ssize_t rd = fs_read(f, buf, sz, 0);
-		if (rd < 0) { kfree(buf); fs_file_free(f); return -1; }
-		buf[rd] = '\0'; sz = (size_t)rd;
-	}
+    char *buf = 0;
+    size_t sz = f->size;
+    if (sz > 0) {
+        buf = (char*)kmalloc(sz + 1);
+        if (!buf) { fs_file_free(f); return -1; }
+        ssize_t rd = fs_read(f, buf, sz, 0);
+        if (rd < 0) { kfree(buf); fs_file_free(f); return -1; }
+        buf[rd] = '\0'; sz = (size_t)rd;
+    } else {
+        // fallback: unknown size, read in chunks until EOF
+        size_t cap = 4096; buf = (char*)kmalloc(cap + 1); if (!buf) { fs_file_free(f); return -1; }
+        sz = 0;
+        for (;;) {
+            if (sz + 4096 > cap) { size_t ncap = cap * 2; char *nb = (char*)krealloc(buf, ncap + 1); if (!nb) break; buf = nb; cap = ncap; }
+            ssize_t rd = fs_read(f, buf + sz, 4096, sz);
+            if (rd <= 0) break; sz += (size_t)rd;
+        }
+        buf[sz] = '\0';
+    }
 	fs_file_free(f);
 	// parse into lines
 	buf_clear(E);
@@ -465,8 +631,15 @@ static int file_save(Editor *E, const char *path) {
 		if (E->lines[i].len) { memcpy(buf + off, E->lines[i].data, E->lines[i].len); off += E->lines[i].len; }
 		if (i + 1 < E->line_count) buf[off++] = '\n';
 	}
-	struct fs_file *f = fs_open(path);
-	if (!f) f = fs_create_file(path);
+    char abs[512];
+    const char *use_path = path;
+    if (path && path[0] != '/') {
+        char cwd[256]; osh_get_cwd(cwd, sizeof(cwd));
+        osh_resolve_path(cwd, path, abs, sizeof(abs));
+        use_path = abs;
+    }
+    struct fs_file *f = fs_open(use_path);
+    if (!f) f = fs_create_file(use_path);
 	if (!f) { kfree(buf); return -1; }
 	ssize_t wr = fs_write(f, buf, total, 0);
 	fs_file_free(f);
@@ -474,6 +647,68 @@ static int file_save(Editor *E, const char *path) {
 	if (wr < 0 || (size_t)wr != total) return -1;
 	E->modified = 0;
 	return 0;
+}
+
+// ---- Path helpers ----
+static void path_dirname(const char* path, char* out, size_t out_sz) {
+    if (!path || !path[0]) { strncpy(out, "/", out_sz-1); out[out_sz-1]='\0'; return; }
+    size_t len = strlen(path);
+    if (len == 0) { strncpy(out, "/", out_sz-1); out[out_sz-1]='\0'; return; }
+    // skip trailing slash except root
+    while (len>1 && path[len-1]=='/') len--;
+    // find last '/'
+    size_t i = len; while (i>0 && path[i-1] != '/') i--;
+    if (i==0) { strncpy(out, "/", out_sz-1); out[out_sz-1]='\0'; return; }
+    if (i==1) { out[0]='/'; out[1]='\0'; return; }
+    size_t copy = (i-1 < out_sz-1) ? (i-1) : (out_sz-1);
+    memcpy(out, path, copy); out[copy]='\0';
+}
+
+static void make_absolute_path(const char* base_dir, const char* name, char* out, size_t out_sz) {
+    if (name && name[0]=='/') { strncpy(out, name, out_sz-1); out[out_sz-1]='\0'; return; }
+    if (!base_dir || !base_dir[0]) { strncpy(out, name, out_sz-1); out[out_sz-1]='\0'; return; }
+    size_t bl = strlen(base_dir);
+    if (bl==1 && base_dir[0]=='/') { // root
+        size_t nlen = strlen(name);
+        if (out_sz>0) {
+            out[0] = '/';
+            size_t rem = (out_sz > 2) ? (out_sz - 2) : 0;
+            size_t copy = (nlen < rem) ? nlen : rem;
+            if (copy) memcpy(out+1, name, copy);
+            out[1 + copy] = '\0';
+        }
+        return;
+    }
+    // ensure no trailing '/'
+    char tmp[512]; strncpy(tmp, base_dir, sizeof(tmp)-1); tmp[sizeof(tmp)-1]='\0';
+    while (bl>1 && tmp[bl-1]=='/') { tmp[bl-1]='\0'; bl--; }
+    size_t nlen = strlen(name);
+    size_t need = bl + 1 + nlen + 1;
+    if (out_sz>0) {
+        size_t copy = (need < out_sz) ? need : out_sz;
+        size_t pos = 0; memcpy(out+pos, tmp, bl); pos+=bl; out[pos++] = '/';
+        size_t rem = copy - pos - 1; if ((int)rem < 0) rem = 0; if (rem > nlen) rem = nlen;
+        if (rem) memcpy(out+pos, name, rem); pos += rem; out[pos] = '\0';
+        if (copy==out_sz) out[out_sz-1]='\0';
+    }
+}
+
+static void fix_duplicate_tail(char* path) {
+    if (!path) return;
+    size_t len = strlen(path); if (len == 0) return;
+    // remove trailing slash unless root
+    while (len > 1 && path[len-1] == '/') { path[--len] = '\0'; }
+    // find last and previous segment
+    int i = (int)len - 1; while (i > 0 && path[i] != '/') i--;
+    if (i <= 0) return; // no parent
+    const char* name = path + i + 1; int end1 = (int)strlen(name);
+    int j = i - 1; while (j > 0 && path[j] != '/') j--;
+    const char* prev = path + (j > 0 ? j + 1 : 1);
+    int len_prev = i - (j > 0 ? j + 1 : 1);
+    if (len_prev == end1 && strncmp(prev, name, (size_t)end1) == 0) {
+        // truncate at last slash -> collapse duplicate tail
+        path[i] = '\0';
+    }
 }
 
 // ---- Key handling helpers ----
@@ -522,14 +757,16 @@ void editor_run(const char *path) {
 	Editor E; buf_init(&E);
 	apply_theme(0);
 	if (path && path[0]) {
-		if (file_load(&E, path) == 0) { strncpy(E.filename, path, sizeof(E.filename)-1); E.filename[sizeof(E.filename)-1]='\0'; }
-		else { strncpy(E.filename, path, sizeof(E.filename)-1); E.filename[sizeof(E.filename)-1]='\0'; }
+		char abs[512]; const char* use = path;
+		if (path[0] != '/') { char cwd[256]; osh_get_cwd(cwd, sizeof(cwd)); make_absolute_path(cwd, path, abs, sizeof(abs)); use = abs; }
+		if (file_load(&E, use) == 0) { strncpy(E.filename, use, sizeof(E.filename)-1); E.filename[sizeof(E.filename)-1]='\0'; fix_duplicate_tail(E.filename); editor_update_syntax(&E); }
+		else { strncpy(E.filename, use, sizeof(E.filename)-1); E.filename[sizeof(E.filename)-1]='\0'; fix_duplicate_tail(E.filename); editor_update_syntax(&E); }
 	}
 	// initial draw
 	kclear_col(0x08);
 	ui_draw_menu();
-	ui_draw_view(&E);
-	ui_draw_status(&E, "Ctrl+O open, Ctrl+S save, Ctrl+X quit");
+	ui_draw_view(&E);                                            ///
+	ui_draw_status(&E, "                                    ");
 	ui_place_cursor(&E);
 
 	int running = 1;
@@ -537,14 +774,7 @@ void editor_run(const char *path) {
 		char c = kgetc();
 		int redraw = 0, restatus = 0;
 		int old_view_top = E.view_top;
-		if (c == 27) { // ESC -> открыть верхнюю панель меню
-			int quit = menu_show(&E);
-			// после закрытия меню перерисовать всё
-			ui_draw_menu();
-			ui_draw_view(&E);
-			ui_draw_status(&E, 0);
-			ui_place_cursor(&E);
-			if (quit) { running = 0; break; }
+		if (c == 27) { // ESC: игнорировать (меню отключено)
 			continue;
 		}
 		if ((unsigned char)c == KEY_LEFT) { move_left(&E); redraw = 0; }
@@ -562,7 +792,13 @@ void editor_run(const char *path) {
 		else if (c == 0x13) { // Ctrl+S
 			if (!E.filename[0]) {
 				char name[256];
-				if (prompt_input("Save as: ", name, sizeof(name), 0)) { strncpy(E.filename, name, sizeof(E.filename)-1); E.filename[sizeof(E.filename)-1]='\0'; }
+				if (prompt_input("Save as: ", name, sizeof(name), 0)) {
+					char base[256];
+					if (E.filename[0] == '/') { path_dirname(E.filename, base, sizeof(base)); }
+					else { osh_get_cwd(base, sizeof(base)); }
+					char abs[512]; make_absolute_path(base, name, abs, sizeof(abs));
+					strncpy(E.filename, abs, sizeof(E.filename)-1); E.filename[sizeof(E.filename)-1]='\0'; editor_update_syntax(&E);
+				}
 			}
 			if (E.filename[0]) {
 				int rc = file_save(&E, E.filename);
@@ -573,7 +809,9 @@ void editor_run(const char *path) {
 		else if (c == 0x0F) { // Ctrl+O
 			char name[256];
 			if (prompt_input("Open: ", name, sizeof(name), 0)) {
-				if (file_load(&E, name) == 0) { strncpy(E.filename, name, sizeof(E.filename)-1); E.filename[sizeof(E.filename)-1]='\0'; redraw = 1; ui_draw_status(&E, "Opened."); }
+				char abs[512]; const char* use = name;
+				if (name[0] != '/') { char cwd[256]; osh_get_cwd(cwd, sizeof(cwd)); make_absolute_path(cwd, name, abs, sizeof(abs)); use = abs; }
+				if (file_load(&E, use) == 0) { strncpy(E.filename, use, sizeof(E.filename)-1); E.filename[sizeof(E.filename)-1]='\0'; editor_update_syntax(&E); redraw = 1; ui_draw_status(&E, "Opened."); }
 				else { ui_draw_status(&E, "Open failed!"); }
 				restatus = 1;
 			}
@@ -613,7 +851,7 @@ void editor_run(const char *path) {
 
 		ensure_cursor_visible(&E);
 		if (E.view_top != old_view_top) redraw = 1;
-		if (redraw) { ui_draw_view(&E); ui_draw_menu(); }
+		if (redraw) { ui_draw_view(&E); }
 		if (redraw || restatus) { ui_draw_status(&E, 0); }
 		ui_place_cursor(&E);
 	}

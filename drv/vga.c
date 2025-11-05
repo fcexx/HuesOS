@@ -85,7 +85,10 @@ void kprint_colorized(const char* str)
     uint8_t color = 0x07;
     const char* p = str;
     while (*p) {
-        if (*p == '<' && p[1] == '(' && p[2] && p[3] && p[4] == ')' && p[5] == '>') {
+        // Чтобы исключить чтение за пределы буфера, проверяем доступную длину вперёд
+        // и лишь затем считаем это цветовым тегом.
+        size_t ahead = strnlen(p, 6);
+        if (ahead >= 6 && p[0] == '<' && p[1] == '(' && p[4] == ')' && p[5] == '>') {
             color = parse_color_code(p[2], p[3]);
             p += 6;
             continue;

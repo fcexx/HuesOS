@@ -1,6 +1,7 @@
 #include <sysinfo.h>
 #include <thread.h>
 #include <stdint.h>
+#include <axonos.h>
 
 void neofetch_run(void) {
     const char *cpu = sysinfo_cpu_name();
@@ -22,9 +23,9 @@ void neofetch_run(void) {
     kprintf("<(08)>                                   '-._____.-'\n");
 
     /* инфа */
-    kprintf("\n<(0f)>========================================\n");
-    kprintf("<(0f)> <(0e)>OS:       <(0b)>AxonOS x86_64\n");
-    kprintf("<(0f)> <(0e)>Kernel:   <(0b)>Base OK\n");
+    kprintf("<(0f)>========================================\n");
+    kprintf("<(0f)> <(0e)>OS:       <(0b)>%s version %s\n", OS_NAME, OS_VERSION);
+    kprintf("<(0f)> <(0e)>Kernel:   <(0b)>Axon x86_64\n");
     kprintf("<(0f)> <(0e)>CPU:      <(0b)>%s\n", cpu ? cpu : "Unknown");
 
     if (ram >= 0)

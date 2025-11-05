@@ -296,6 +296,24 @@ static int bi_osh(cmd_ctx *c) {
     return status;
 }
 static int bi_pause(cmd_ctx *c){ (void)c; kprintf("Press any key to continue...\n"); kgetc(); return 0;}
+static int bi_chipset(cmd_ctx *c) {
+    if (c->argc < 2) {
+        kprintf("usage: chipset <command>\n");
+        kprintf("commands:\n");
+        kprintf("  info - print chipset information\n");
+        kprintf("  reset - reset chipset\n");
+        return 1;
+    }
+    if (strcmp(c->argv[1], "info") == 0) {
+        intel_print_chipset_info();
+    } else if (strcmp(c->argv[1], "reset") == 0) {
+        intel_chipset_reset();
+    } else {
+        kprintf("<(0c)>chipset: unknown command: %s\n", c->argv[1]);
+        return 1;
+    }
+    return 0;
+}
 
 extern void ascii_art(void);
 typedef int (*builtin_fn)(cmd_ctx*);
@@ -306,7 +324,7 @@ static const builtin builtin_table[] = {
     {"about", bi_about}, {"time", bi_time}, {"date", bi_date}, {"uptime", bi_uptime},
     {"edit", bi_edit}, {"snake", bi_snake}, {"tetris", bi_tetris}, {"clock", bi_clock},
     {"reboot", bi_reboot}, {"shutdown", bi_shutdown}, {"neofetch", bi_neofetch},
-    {"osh", bi_osh}, {"art", ascii_art}, {"pause", bi_pause},
+    {"osh", bi_osh}, {"art", ascii_art}, {"pause", bi_pause}, {"chipset", bi_chipset},
 };
 
 static builtin_fn find_builtin(const char* name) {

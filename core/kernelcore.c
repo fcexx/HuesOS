@@ -23,6 +23,7 @@
 #include <ext2.h>
 #include <ramfs.h>
 #include <editor.h>
+#include <intel_chipset.h>
 
 int exit = 0;
 
@@ -183,7 +184,6 @@ void ascii_art() {
 
 void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {
     kclear();
-    ascii_art();
     kprint("Initializing kernel...\n");
     sysinfo_init(multiboot_magic, multiboot_info);
 
@@ -197,6 +197,7 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {
 
     pci_init();
     pci_dump_devices();
+    intel_chipset_init();
 
     thread_init();
     iothread_init();
@@ -234,7 +235,7 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {
         fs_write(license_file, license_text, strlen(license_text), 0);
         fs_file_free(license_file);
     }
-    
+    ascii_art();
     // Показываем текущее время из RTC
     rtc_datetime_t current_time;
     rtc_read_datetime(&current_time);

@@ -33,4 +33,8 @@ int unmap_page_2m(uint64_t va);
 // Invalidate TLB for given virtual address
 void invlpg(void* va);
 
+// Translate virtual address to physical address
+// Returns 0 if the address is not mapped
+uint64_t virtual_to_physical(uint64_t va);
+
 

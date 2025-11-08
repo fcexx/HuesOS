@@ -20,18 +20,6 @@
 
 typedef struct Point { uint8_t x; uint8_t y; } Point;
 
-static uint16_t cell_offset(uint8_t x, uint8_t y) {
-    return (uint16_t)((y * MAX_COLS + x) * 2);
-}
-
-static void draw_cell(uint8_t x, uint8_t y, uint8_t ch, uint8_t color) {
-    write(ch, color, cell_offset(x, y));
-}
-
-static void draw_text(uint8_t x, uint8_t y, const char* s, uint8_t color) {
-    for (uint8_t i = 0; s[i]; i++) draw_cell(x + i, y, (uint8_t)s[i], color);
-}
-
 static void draw_border(void) {
     for (uint8_t x = 0; x < MAX_COLS; x++) {
         draw_cell(x, 0, ' ', 0x22);

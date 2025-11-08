@@ -14,6 +14,9 @@ void osh_get_cwd(char* out, unsigned long outlen);
 // Разрешить относительный путь относительно base в out
 void osh_resolve_path(const char* base, const char* arg, char* out, unsigned long outlen);
 
+// Экспорт списка builtin-команд для подсказок
+int osh_get_builtin_names(const char*** out_names);
+
 #ifdef __cplusplus
 }
 #endif

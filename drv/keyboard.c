@@ -112,11 +112,16 @@ void keyboard_handler(cpu_registers_t* regs) {
 }
 
 // Обработка одного байта сканкода (вынесена для возможности polling из PIT)
-// Temporary debug: print scancodes to serial to trace keyboard behavior
+// Опциональная отладка сканкодов — выключена по умолчанию для минимизации задержек в ISR
 #include <debug.h>
+#ifndef KBD_DEBUG
+#define KBD_DEBUG 0
+#endif
 
 void keyboard_process_scancode(uint8_t scancode) {
+#if KBD_DEBUG
     qemu_debug_printf("kbd: scancode=0x%02x\n", scancode);
+#endif
         // Обрабатываем только нажатие клавиш (не отпускание)
         if (scancode & 0x80) {
                 // Клавиша отпущена

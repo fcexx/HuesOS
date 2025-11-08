@@ -41,14 +41,24 @@ static uint16_t g_view_cache[VIEW_H][VIEW_W];
 static int g_view_cache_valid = 0;
 
 static inline void view_cache_invalidate(void) { g_view_cache_valid = 0; }
+static inline void view_cache_invalidate_row_idx(int idx) {
+    if (idx < 0 || idx >= VIEW_H) return;
+    for (uint32_t x = 0; x < VIEW_W; x++) g_view_cache[idx][x] = 0xFFFF;
+    g_view_cache_valid = 1; // keep valid but row invalidated
+}
+static inline void view_cache_invalidate_line_with_viewtop(int view_top, int row) {
+    int v = row - view_top;
+    view_cache_invalidate_row_idx(v);
+}
 
 static void apply_theme(int idx) {
 	if (idx < 0) idx = 0; if (idx >= THEME_COUNT) idx = THEME_COUNT - 1;
 	g_theme_index = idx;
-	g_attr_menu = THEMES[idx].menu_attr;
-	g_attr_status = THEMES[idx].status_attr;
-	g_attr_text = THEMES[idx].text_attr;
-    g_attr_text_dim = THEMES[idx].text_dim_attr;
+	// mask out VGA blink bit (bit7) to avoid VMware blinking/flicker
+	g_attr_menu = (uint8_t)(THEMES[idx].menu_attr & 0x7F);
+	g_attr_status = (uint8_t)(THEMES[idx].status_attr & 0x7F);
+	g_attr_text = (uint8_t)(THEMES[idx].text_attr & 0x7F);
+    g_attr_text_dim = (uint8_t)(THEMES[idx].text_dim_attr & 0x7F);
     view_cache_invalidate();
 }
 
@@ -348,7 +358,8 @@ static void editor_update_syntax(Editor *E) {
 }
 
 static inline uint8_t attr_with_fg(uint8_t base_attr, uint8_t fg) {
-    return (uint8_t)((base_attr & 0xF0) | (fg & 0x0F));
+    // clear blink bit (bit7), keep background (bits 4..6) and set foreground
+    return (uint8_t)(((base_attr & 0x70)) | (fg & 0x0F));
 }
 
 static int is_ident_char(char c) { return (c=='_' || (c>='0'&&c<='9') || (c>='a'&&c<='z') || (c>='A'&&c<='Z')); }
@@ -464,7 +475,12 @@ static void ui_place_cursor(Editor *E) {
 	if (scr_y >= VIEW_Y0 + VIEW_H) scr_y = VIEW_Y0 + VIEW_H - 1;
 	if (scr_x < 0) scr_x = 0;
 	if (scr_x >= (int)VIEW_W) scr_x = (int)VIEW_W - 1;
-	vga_set_cursor((uint32_t)scr_x, (uint32_t)scr_y);
+    // avoid redundant hardware cursor updates (helps on VMware)
+    static uint32_t last_x = 0xFFFFFFFFu, last_y = 0xFFFFFFFFu;
+    if ((uint32_t)scr_x != last_x || (uint32_t)scr_y != last_y) {
+        vga_set_cursor((uint32_t)scr_x, (uint32_t)scr_y);
+        last_x = (uint32_t)scr_x; last_y = (uint32_t)scr_y;
+    }
 }
 
 // ---- ESC top menu ----
@@ -850,6 +866,11 @@ void editor_run(const char *path) {
 		}
 
 		ensure_cursor_visible(&E);
+        // invalidate cache rows affected by edit to guarantee stable repaint under heavy typing
+        if (redraw) {
+            view_cache_invalidate_line_with_viewtop(E.view_top, E.cursor_row);
+            view_cache_invalidate_line_with_viewtop(E.view_top, E.cursor_row - 1);
+        }
 		if (E.view_top != old_view_top) redraw = 1;
 		if (redraw) { ui_draw_view(&E); }
 		if (redraw || restatus) { ui_draw_status(&E, 0); }

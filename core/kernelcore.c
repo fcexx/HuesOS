@@ -244,7 +244,7 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {
         current_time.hour, current_time.minute, current_time.second);
     
     kprintf("\n<(0f)>Welcome to %s <(0b)>%s<(0f)>!\n", OS_NAME, OS_VERSION);
-    kprint("shell: ring0 build-in shell\n");
+    kprint("OSH v0.1 (axosh)\n");
 
     ring0_shell();  
 

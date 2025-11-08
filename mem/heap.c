@@ -1,5 +1,6 @@
-#include <heap.h>
+#include "../inc/heap.h"
 #include <string.h>
+#include <stdint.h>
 
 // Very simple kernel heap: first-fit free list with headers, 16-byte alignment,
 // coalescing on free. No thread safety assumed (callers should serialize).
@@ -16,6 +17,9 @@ typedef struct heap_block_header {
 static uint8_t* heap_base = 0;
 static size_t   heap_capacity = 0;
 static heap_block_header_t* head = 0;
+
+static size_t heap_used_now = 0;
+static size_t heap_peak     = 0;
 
 extern uint8_t _end[]; // provided by linker as end of kernel image
 
@@ -38,6 +42,9 @@ void heap_init(uintptr_t heap_start, size_t heap_size) {
     head->next = 0;
     head->prev = 0;
     head->free = 1;
+
+    heap_used_now = 0;
+    heap_peak = 0;
 }
 
 static void split_block(heap_block_header_t* blk, size_t size) {
@@ -77,6 +84,8 @@ void* kmalloc(size_t size) {
         if (cur->free && cur->size >= size) {
             split_block(cur, size);
             cur->free = 0;
+            heap_used_now += cur->size;
+            if (heap_used_now > heap_peak) heap_peak = heap_used_now;
             return (uint8_t*)cur + sizeof(heap_block_header_t);
         }
         cur = cur->next;
@@ -88,6 +97,7 @@ void kfree(void* ptr) {
     if (!ptr) return;
     heap_block_header_t* blk = (heap_block_header_t*)((uint8_t*)ptr - sizeof(heap_block_header_t));
     blk->free = 1;
+    if (heap_used_now >= blk->size) heap_used_now -= blk->size; else heap_used_now = 0;
     coalesce(blk);
 }
 
@@ -99,6 +109,8 @@ void* krealloc(void* ptr, size_t new_size) {
     new_size = ALIGN16(new_size);
     if (new_size <= old_size) {
         split_block(blk, new_size);
+        size_t diff = old_size - new_size;
+        if (heap_used_now >= diff) heap_used_now -= diff; else heap_used_now = 0;
         return ptr;
     }
     // try to grow in place if next is free and large enough
@@ -107,6 +119,9 @@ void* krealloc(void* ptr, size_t new_size) {
         blk->next = blk->next->next;
         if (blk->next) blk->next->prev = blk;
         split_block(blk, new_size);
+        size_t diff = new_size - old_size;
+        heap_used_now += diff;
+        if (heap_used_now > heap_peak) heap_peak = heap_used_now;
         return ptr;
     }
     void* n = kmalloc(new_size);
@@ -123,5 +138,9 @@ void* kcalloc(size_t num, size_t size) {
     if (p) memset(p, 0, total);
     return p;
 }
+
+size_t heap_total_bytes(void) { return heap_capacity; }
+size_t heap_used_bytes(void)  { return heap_used_now; }
+size_t heap_peak_bytes(void)  { return heap_peak; }
 
 

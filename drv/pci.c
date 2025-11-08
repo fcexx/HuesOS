@@ -138,11 +138,19 @@ void pci_dump_devices(void)
          * Format: "PCI <bus>.<device>.<function>: ..."
          * Example: "PCI 0.0.0: vendor=0x8086 device=0x1234 class=0x02/00 prog_if=0x00 hdr=0x00 irq=11"
          */
+        if (d->irq == 0) {
+            kprintf("PCI %u.%u.%u: vendor=%04x device=%04x class=%02x/%02x prog_if=%02x hdr=%02x irq=N/A\n",
+                    d->bus, d->device, d->function,
+                    d->vendor_id, d->device_id,
+                    d->class_code, d->subclass, d->prog_if,
+                    d->header_type);
+        } else {
         kprintf("PCI %u.%u.%u: vendor=%04x device=%04x class=%02x/%02x prog_if=%02x hdr=%02x irq=%u\n",
                 d->bus, d->device, d->function,
                 d->vendor_id, d->device_id,
                 d->class_code, d->subclass, d->prog_if,
                 d->header_type, d->irq);
+        }
     }
 }
 

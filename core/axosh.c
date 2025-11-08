@@ -10,12 +10,19 @@
 #include "../inc/ext2.h"
 #include "../inc/ramfs.h"
 #include <stdint.h> // for rtc types forward-declared below
+#include "../inc/osh_line.h"
+// local prototype for kprintf
+void kprintf(const char* fmt, ...);
+// forward decls for optional chipset commands
+void intel_print_chipset_info(void);
+void intel_chipset_reset(void);
 #include "../inc/thread.h"
 #include "../inc/editor.h"
 #include "../inc/snake.h"
 #include "../inc/tetris.h"
 #include "../inc/clock.h"
 #include "../inc/neofetch.h"
+#include "../inc/sysinfo.h"
 
 typedef long ssize_t;
 
@@ -175,14 +182,15 @@ static int out_printf(cmd_ctx *c, const char *s) { osh_write(c->out, c->out_len,
 static int bi_echo(cmd_ctx *c) {
     if (c->argc <= 1) { out_printf(c, "\n"); return 0; }
     for (int i=1;i<c->argc;i++) { out_printf(c, c->argv[i]); if (i+1<c->argc) out_printf(c, " "); }
-    out_printf(c, "\n"); return 0;
+    out_printf(c, "\n");
+    return 0;
 }
 
 static int bi_pwd(cmd_ctx *c) { (void)c; char tmp[300]; strncpy(tmp, g_cwd, sizeof(tmp)-1); tmp[sizeof(tmp)-1]='\0'; osh_write(c->out, c->out_len, c->out_cap, tmp); osh_write(c->out, c->out_len, c->out_cap, "\n"); return 0; }
 
 static int bi_cd(cmd_ctx *c) {
     const char *arg = c->argc>1 ? c->argv[1] : "/";
-    char path[256]; resolve_path(g_cwd, arg, path, sizeof(path));
+    char path[256]; join_cwd(g_cwd, arg, path, sizeof(path));
     if (!is_dir_path(path)) { osh_write(c->out, c->out_len, c->out_cap, "cd: not a directory\n"); return 1; }
     size_t l = strlen(path); if (l>1 && path[l-1]=='/') path[l-1]='\0'; strncpy(g_cwd, path, sizeof(g_cwd)-1); g_cwd[sizeof(g_cwd)-1]='\0'; return 0;
 }
@@ -213,11 +221,22 @@ static int bi_cat(cmd_ctx *c) {
     return rc;
 }
 
-static int bi_mkdir(cmd_ctx *c) { if (c->argc<2) { osh_write(c->out, c->out_len, c->out_cap, "mkdir: missing operand\n"); return 1; } char path[256]; resolve_path(g_cwd, c->argv[1], path, sizeof(path)); int r=ramfs_mkdir(path); return r==0?0:1; }
-static int bi_touch(cmd_ctx *c) { if (c->argc<2) { osh_write(c->out, c->out_len, c->out_cap, "touch: missing operand\n"); return 1; } char path[256]; resolve_path(g_cwd, c->argv[1], path, sizeof(path)); struct fs_file *f = fs_create_file(path); if (!f) return 1; fs_file_free(f); return 0; }
-static int bi_rm(cmd_ctx *c) { if (c->argc<2) { osh_write(c->out, c->out_len, c->out_cap, "rm: missing operand\n"); return 1; } char path[256]; resolve_path(g_cwd, c->argv[1], path, sizeof(path)); int r=ramfs_remove(path); return r==0?0:1; }
+static int bi_mkdir(cmd_ctx *c) { if (c->argc<2) { osh_write(c->out, c->out_len, c->out_cap, "mkdir: missing operand\n"); return 1; } char path[256]; join_cwd(g_cwd, c->argv[1], path, sizeof(path)); int r=ramfs_mkdir(path); return r==0?0:1; }
+static int bi_touch(cmd_ctx *c) { if (c->argc<2) { osh_write(c->out, c->out_len, c->out_cap, "touch: missing operand\n"); return 1; } char path[256]; join_cwd(g_cwd, c->argv[1], path, sizeof(path)); struct fs_file *f = fs_create_file(path); if (!f) return 1; fs_file_free(f); return 0; }
+static int bi_rm(cmd_ctx *c) { if (c->argc<2) { osh_write(c->out, c->out_len, c->out_cap, "rm: missing operand\n"); return 1; } char path[256]; join_cwd(g_cwd, c->argv[1], path, sizeof(path)); int r=ramfs_remove(path); return r==0?0:1; }
 
-static int bi_about(cmd_ctx *c) { osh_write(c->out,c->out_len,c->out_cap,"AxonOS shell (osh)\n"); return 0; }
+#include "../inc/axonos.h"
+
+static int bi_about(cmd_ctx *c) { 
+    (void)c;
+    kprintf("%s v%s\n", OS_NAME, OS_VERSION);
+    kprintf("Copyright (c) 2025 %s Team\n", OS_AUTHORS);
+    kprintf("fcexx, kotazz, neosporimy, dasteldi\n");
+    kprintf("<(09)>The operating system is licensed under the MIT license.\n");
+    kprintf("<(0f)>GitHub: <(0b)>https://github.com/fcexx/AxonOS\n");
+    kprintf("<(0f)>Website: <(0b)>https://wh27961.web4.maze-tech.ru\n");
+    return 0;
+    }
 
 static int bi_time(cmd_ctx *c) { rtc_datetime_t dt; rtc_read_datetime(&dt); char out[16]; int pos=0;
     int hh=dt.hour, mm=dt.minute, ss=dt.second;
@@ -258,10 +277,24 @@ static int bi_reboot(cmd_ctx *c){ (void)c; reboot_system(); return 0; }
 static int bi_shutdown(cmd_ctx *c){ (void)c; shutdown_system(); return 0; }
 static int bi_neofetch(cmd_ctx *c){ (void)c; neofetch_run(); return 0; }
 
+static int bi_mem(cmd_ctx *c){
+    (void)c;
+    int ram = sysinfo_ram_mb();
+    size_t htot = heap_total_bytes();
+    size_t huse = heap_used_bytes();
+    size_t hpeak = heap_peak_bytes();
+    if (ram >= 0) kprintf("RAM total: %d MB\n", ram);
+    else kprintf("RAM total: unknown\n");
+    kprintf("Heap: used %u KB / total %u KB (peak %u KB)\n",
+        (unsigned)(huse/1024u), (unsigned)(htot/1024u), (unsigned)(hpeak/1024u));
+    return 0;
+}
+
 // Run script file: osh <script>
 static int bi_osh(cmd_ctx *c) {
     if (c->argc < 2) { osh_write(c->out, c->out_len, c->out_cap, "usage: osh <script>\n"); return 1; }
-    char path[256]; resolve_path(g_cwd, c->argv[1], path, sizeof(path));
+    // Use the same path join logic as cat/ls to avoid intermittent resolution issues
+    char path[256]; join_cwd(g_cwd, c->argv[1], path, sizeof(path));
     struct fs_file *f = fs_open(path); if (!f) { osh_write(c->out, c->out_len, c->out_cap, "osh: cannot open script\n"); return 1; }
     size_t want = f->size ? f->size : 0; char *buf = (char*)kmalloc(want + 1);
     if (!buf) { fs_file_free(f); return 1; }
@@ -315,7 +348,40 @@ static int bi_chipset(cmd_ctx *c) {
     return 0;
 }
 
+static int bi_help(cmd_ctx *c) {
+    (void)c;
+    kprint("OSH v0.1 (axosh)\n");
+    kprint("Available commands:\n");
+    kprint("help - show available commands\n");
+    kprint("clear, cls - clear the screen\n");
+    kprint("reboot - reboot the system\n");
+    kprint("shutdown - shutdown the system\n");
+    kprint("echo <text> - print text\n");
+    kprint("snake - run the snake game\n");
+    kprint("tetris - run the tetris game\n");
+    kprint("clock - run the analog clock\n");
+    kprint("time - show current time from RTC\n");
+    kprint("date - show current date from RTC\n");
+    kprint("uptime - show system uptime based on RTC ticks\n");
+    kprint("about - show information about authors and system\n");
+    kprint("ls - list directory contents\n");
+    kprint("cat - print file contents\n");
+    kprint("mkdir - create a directory\n");
+    kprint("touch - create an empty file\n");
+    kprint("rm - remove a file\n");
+    kprint("edit - edit a file\n");
+    kprint("pause - pause the shell and wait for a key press\n");
+    kprint("chipset info - print chipset information\n");
+    kprint("chipset reset - reset chipset\n");
+    kprint("neofetch - show system information\n");
+    kprint("osh - run a script file\n");
+    kprint("art - show ASCII art\n");
+    kprint("exit - exit the shell\n");
+    return 0;
+}
+
 extern void ascii_art(void);
+static int bi_art(cmd_ctx *c){ (void)c; ascii_art(); return 0; }
 typedef int (*builtin_fn)(cmd_ctx*);
 typedef struct { const char* name; builtin_fn fn; } builtin;
 static const builtin builtin_table[] = {
@@ -323,13 +389,22 @@ static const builtin builtin_table[] = {
     {"ls", bi_ls}, {"cat", bi_cat}, {"mkdir", bi_mkdir}, {"touch", bi_touch}, {"rm", bi_rm},
     {"about", bi_about}, {"time", bi_time}, {"date", bi_date}, {"uptime", bi_uptime},
     {"edit", bi_edit}, {"snake", bi_snake}, {"tetris", bi_tetris}, {"clock", bi_clock},
-    {"reboot", bi_reboot}, {"shutdown", bi_shutdown}, {"neofetch", bi_neofetch},
-    {"osh", bi_osh}, {"art", ascii_art}, {"pause", bi_pause}, {"chipset", bi_chipset},
+    {"reboot", bi_reboot}, {"shutdown", bi_shutdown}, {"neofetch", bi_neofetch}, {"mem", bi_mem},
+    {"osh", bi_osh}, {"art", bi_art}, {"pause", bi_pause}, {"chipset", bi_chipset}, {"help", bi_help},
 };
 
 static builtin_fn find_builtin(const char* name) {
     for (size_t i=0;i<sizeof(builtin_table)/sizeof(builtin_table[0]);i++) if (strcmp(builtin_table[i].name, name)==0) return builtin_table[i].fn;
     return NULL;
+}
+
+// export builtin names for completion
+int osh_get_builtin_names(const char*** out_names) {
+    static const char* names[64];
+    size_t n = sizeof(builtin_table)/sizeof(builtin_table[0]);
+    for (size_t i=0;i<n && i<64;i++) names[i] = builtin_table[i].name;
+    *out_names = names;
+    return (int)n;
 }
 
 // -------- executor --------
@@ -473,16 +548,21 @@ static void bg_thread_entry(void) {
 // -------- public loop --------
 void osh_run(void) {
     static char buf[512];
+    osh_history_init();
     for (;;) {
-        char prompt[300]; prompt[0]='\0';
-        strncat(prompt, g_cwd, sizeof(prompt)-1);
+        /* приглашение osh + строковый редактор */
+        char prompt[128]; prompt[0]='\0';
+        // показать cwd в приглашении
+        strncpy(prompt, g_cwd, sizeof(prompt)-3); prompt[sizeof(prompt)-3]='\0';
         strncat(prompt, "> ", sizeof(prompt)-1 - strlen(prompt));
-        kprint((uint8_t*)prompt);
-        char *line = kgets(buf, (int)sizeof(buf)); if (!line) continue;
+        int n = osh_line_read(prompt, g_cwd, buf, (int)sizeof(buf));
+        if (n < 0) continue;
+        char *line = buf;
         // Detect trailing background '&' at top level quickly; if present -> spawn job thread
         int tn=0; token *t = lex(line, &tn); if (tn==0) { if (t) kfree(t); continue; }
         int bg = (t[tn-1].t == T_BG);
         free_tokens(t, tn);
+        if (!bg) osh_history_add(line);
         if (bg) { job_push(line); thread_create(bg_thread_entry, "bg"); continue; }
         int rc = exec_line(line); if (rc == 2) break; // exit
     }

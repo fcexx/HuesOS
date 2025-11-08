@@ -489,3 +489,15 @@ void vga_get_cursor(uint32_t* x, uint32_t* y)
     if (x) *x = (pos % (MAX_COLS * 2)) / 2;
     if (y) *y = pos / (MAX_COLS * 2);
 }
+
+uint16_t cell_offset(uint8_t x, uint8_t y) {
+    return (uint16_t)((y * MAX_COLS + x) * 2);
+}
+
+void draw_cell(uint8_t x, uint8_t y, uint8_t ch, uint8_t color) {
+    write(ch, color, cell_offset(x, y));
+}
+
+void draw_text(uint8_t x, uint8_t y, const char* s, uint8_t color) {
+    for (uint8_t i = 0; s[i]; i++) draw_cell(x + i, y, (uint8_t)s[i], color);
+}

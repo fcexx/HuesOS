@@ -201,6 +201,7 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {
 
     thread_init();
     iothread_init();
+    
     /* Регистрируем файловую систему */
     ramfs_register();
     ext2_register();
@@ -208,9 +209,15 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {
     ps2_keyboard_init();
     rtc_init();
     
+    // Инициализация PC Speaker
+    pcspkr_init();
+    
     asm volatile("sti");
 
-    kprintf("kernel base: done (idt, gdt, pic, pit, pci, rtc, paging, heap, keyboard)\n");
+    kprintf("kernel base: done (idt, gdt, pic, pit, pci, rtc, paging, heap, keyboard, pcspkr)\n");
+
+    // Воспроизводим звук загрузки
+    pcspkr_play_startup_sound();
 
     static const char license_text[] =
 "MIT License\n"
@@ -236,6 +243,7 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {
         fs_file_free(license_file);
     }
     ascii_art();
+    
     // Показываем текущее время из RTC
     rtc_datetime_t current_time;
     rtc_read_datetime(&current_time);
@@ -248,6 +256,11 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {
 
     ring0_shell();  
 
+    // Звук завершения работы
+    pcspkr_beep(800, 200);
+    pit_sleep_ms(100);
+    pcspkr_beep(600, 300);
+    
     kprint("\nShutting down in 5 seconds...");
     pit_sleep_ms(5000);
     shutdown_system();

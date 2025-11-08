@@ -313,6 +313,10 @@ void kprintf(const char* fmt, ...)
 {
 	va_list ap;
 	va_start(ap, fmt);
+	
+	#include <debug.h>
+	qemu_debug_printf("[KPRINTF] "); // for debugging kprintf itself
+	qemu_debug_printf(fmt, ap);
 
     uint8_t color = 0x07; // светло-серый на чёрном
     for (const char *p = fmt; *p; ) {

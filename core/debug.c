@@ -93,11 +93,17 @@ void print_hex(unsigned int num)
 
 }
 
-// qemu_debug_printf using stdarg
-void qemu_debug_printf(const char *format, ...)
-{
+
+
+void qemu_debug_printf(const char *format, ...) {
     va_list args;
     va_start(args, format);
+    vqemu_debug_printf(format, args);
+    va_end(args);
+}
+
+void vqemu_debug_printf(const char *format, va_list args)
+{
     const char *p = format;
     while (*p) {
         if (*p != '%') {
@@ -189,5 +195,4 @@ void qemu_debug_printf(const char *format, ...)
             write_serial(spec);
         }
     }
-    va_end(args);
 }

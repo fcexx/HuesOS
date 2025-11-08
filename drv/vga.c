@@ -1,3 +1,4 @@
+#include <debug.h>
 #include <stdint.h>
 #include <serial.h>
 #include <vga.h>
@@ -312,11 +313,16 @@ static int utoa_rev(unsigned long long v, unsigned base, int upper, char *out)
 void kprintf(const char* fmt, ...)
 {
 	va_list ap;
-	va_start(ap, fmt);
-	
-	#include <debug.h>
-	qemu_debug_printf("[KPRINTF] "); // for debugging kprintf itself
-	qemu_debug_printf(fmt, ap);
+    va_start(ap, fmt);
+    
+    va_list ap_copy;
+    va_copy(ap_copy, ap);
+    
+    vqemu_debug_printf("[KPRINTF] ");
+    va_end(ap_copy);
+
+    vqemu_debug_printf(fmt, ap_copy);
+
 
     uint8_t color = 0x07; // светло-серый на чёрном
     for (const char *p = fmt; *p; ) {

@@ -199,6 +199,14 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {
     pci_dump_devices();
     intel_chipset_init();
 
+    
+    if (audio_init() == 0) {
+        kprintf("[Kernel] Audio system initialized successfully\n");
+        audio_beep(880, 200);
+    } else {
+        kprintf("[Kernel] Audio initialization failed (no HDA device?)\n");
+    }
+
     thread_init();
     iothread_init();
     /* Регистрируем файловую систему */

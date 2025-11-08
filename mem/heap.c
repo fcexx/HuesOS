@@ -124,4 +124,56 @@ void* kcalloc(size_t num, size_t size) {
     return p;
 }
 
+/**
+ * kmalloc_aligned - Allocate memory with a specific alignment
+ * 
+ * @size:      Size of the allocation
+ * @alignment: Required alignment, must be a power of two
+ * 
+ * Returns a pointer to the aligned memory, or NULL on failure.
+ * The pointer must be freed with kfree_aligned().
+ */
+void* kmalloc_aligned(size_t size, size_t alignment) {
+    if (alignment == 0 || (alignment & (alignment - 1)) != 0) {
+        // Alignment must be a power of two
+        return 0;
+    }
+
+    // We need space for the requested size, plus alignment adjustment,
+    // plus space to store the original pointer for kfree_aligned.
+    size_t total_size = size + alignment - 1 + sizeof(void*);
+    
+    // Allocate the raw memory block
+    void* raw_ptr = kmalloc(total_size);
+    if (!raw_ptr) {
+        return 0;
+    }
+    
+    // Calculate the aligned pointer
+    uintptr_t raw_addr = (uintptr_t)raw_ptr;
+    uintptr_t aligned_addr = (raw_addr + sizeof(void*) + alignment - 1) & ~(alignment - 1);
+    
+    // Store the original raw pointer just before the aligned address
+    void** original_ptr_loc = (void**)(aligned_addr - sizeof(void*));
+    *original_ptr_loc = raw_ptr;
+    
+    return (void*)aligned_addr;
+}
+
+/**
+ * kfree_aligned - Free memory allocated with kmalloc_aligned
+ */
+void kfree_aligned(void* ptr) {
+    if (!ptr) {
+        return;
+    }
+    
+    // Retrieve the original raw pointer stored just before the aligned block
+    void** original_ptr_loc = (void**)((uintptr_t)ptr - sizeof(void*));
+    void* raw_ptr = *original_ptr_loc;
+    
+    // Free the original raw block
+    kfree(raw_ptr);
+}
+
 

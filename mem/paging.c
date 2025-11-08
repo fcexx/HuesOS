@@ -69,4 +69,63 @@ int unmap_page_2m(uint64_t va) {
     return 0;
 }
 
+/**
+ * virtual_to_physical - Translate virtual address to physical address
+ * 
+ * This function walks the page tables to find the physical address
+ * corresponding to a virtual address. Essential for DMA operations.
+ * 
+ * Returns physical address, or 0 if not mapped.
+ */
+uint64_t virtual_to_physical(uint64_t va) {
+    uint64_t l4i = (va >> 39) & 0x1FF;
+    uint64_t l3i = (va >> 30) & 0x1FF;
+    uint64_t l2i = (va >> 21) & 0x1FF;
+    uint64_t l1i = (va >> 12) & 0x1FF;
+    
+    uint64_t* l4 = (uint64_t*)((uint64_t)page_table_l4);
+    
+    // Check L4 entry
+    if (!(l4[l4i] & PG_PRESENT)) {
+        return 0;
+    }
+    
+    uint64_t* l3 = (uint64_t*)(l4[l4i] & ~0xFFFULL);
+    
+    // Check L3 entry - might be 1GB page
+    if (!(l3[l3i] & PG_PRESENT)) {
+        return 0;
+    }
+    if (l3[l3i] & PG_PS_2M) {
+        // 1GB page
+        uint64_t pa_base = l3[l3i] & ~((1ULL << 30) - 1);
+        uint64_t offset = va & ((1ULL << 30) - 1);
+        return pa_base + offset;
+    }
+    
+    uint64_t* l2 = (uint64_t*)(l3[l3i] & ~0xFFFULL);
+    
+    // Check L2 entry - might be 2MB page
+    if (!(l2[l2i] & PG_PRESENT)) {
+        return 0;
+    }
+    if (l2[l2i] & PG_PS_2M) {
+        // 2MB page
+        uint64_t pa_base = l2[l2i] & ~(PAGE_SIZE_2M - 1);
+        uint64_t offset = va & (PAGE_SIZE_2M - 1);
+        return pa_base + offset;
+    }
+    
+    uint64_t* l1 = (uint64_t*)(l2[l2i] & ~0xFFFULL);
+    
+    // Check L1 entry - 4KB page
+    if (!(l1[l1i] & PG_PRESENT)) {
+        return 0;
+    }
+    
+    uint64_t pa_base = l1[l1i] & ~0xFFFULL;
+    uint64_t offset = va & 0xFFFULL;
+    return pa_base + offset;
+}
+
 

@@ -314,7 +314,7 @@ static int bi_chipset(cmd_ctx *c) {
     }
     return 0;
 }
-
+#include <audiotest.h> 
 extern void ascii_art(void);
 typedef int (*builtin_fn)(cmd_ctx*);
 typedef struct { const char* name; builtin_fn fn; } builtin;
@@ -325,6 +325,9 @@ static const builtin builtin_table[] = {
     {"edit", bi_edit}, {"snake", bi_snake}, {"tetris", bi_tetris}, {"clock", bi_clock},
     {"reboot", bi_reboot}, {"shutdown", bi_shutdown}, {"neofetch", bi_neofetch},
     {"osh", bi_osh}, {"art", ascii_art}, {"pause", bi_pause}, {"chipset", bi_chipset},
+
+    
+    {"audio", audiotest_main}
 };
 
 static builtin_fn find_builtin(const char* name) {

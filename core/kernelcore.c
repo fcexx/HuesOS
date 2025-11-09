@@ -215,36 +215,16 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {
     static const char license_text[] = "#!osh\n"
 
 "echo \"\"\n"
-"echo \"== Double math ==\"\n"
-"a = 2 + 2 / (50 - 21) * 29\n"
-"b = 1.5 + 2.25\n"
-"pi = 3.14159265\n"
-"echo \"a = $a, b = $b, pi = $pi\"\n"
-
-"echo \"\"\n"
-"echo \"== if / else if / else ==\"\n"
-"if a == 2 { echo \"a == 2 (ok)\"}\n"
-"else { echo \"a != 2\" }\n"
-
-"echo \"\"\n"
-"echo \"== while loop ==\"\n"
-"counter = 0\n"
-"while counter < 3 {\n"
-"    echo \"counter = $counter\"\n"
-"    counter = $counter + 1\n"
-"}\n"
-
-"echo \"\"\n"
-"echo \"== functions with params ==\"\n"
-"foo(n1, n2) {\n"
-"    sum = $n1 + $n2\n"
-"    echo \"foo: $n1 + $n2 = $sum\"\n"
-"}\n"
-
-"foo(10, 32.5)\n"
-
-"echo \"\"\n"
-"echo \"== done ==\"\n";
+"while 1==1 {\n"
+"    input = %(readline)\n"
+"    if input == \"exit\" {\n"
+"        exit\n"
+"    } else if input == \"hello\" {\n"
+"        echo \"Hello, world!\"\n"
+"    } else {\n"
+"        echo \"Unknown command: $input\"\n"
+"    }\n"
+"}\n";
     struct fs_file *license_file = fs_create_file("/demo");
     if (license_file) {
         fs_write(license_file, license_text, strlen(license_text), 0);

@@ -480,9 +480,11 @@ typedef struct {
     char* inline_cmd;  // non-NULL for single-line bodies
 } osh_if_branch;
 
+static int g_script_depth = 0;
+
 #define OSH_SCRIPT_OK 0
-#define OSH_SCRIPT_EXIT 2
-#define OSH_SCRIPT_ABORT 3
+#define OSH_SCRIPT_EXIT 100
+#define OSH_SCRIPT_ABORT 101
 
 static int osh_find_func(osh_script_ctx* C, const char* nm) {
     for (int i=0;i<C->nfuncs;i++) if (strcmp(C->funcs[i].name, nm)==0) return i; return -1;
@@ -759,7 +761,8 @@ static int osh_exec_range(osh_script_ctx* C, int L, int R) {
                 if (cond_true) {
                     if (branches[bi].inline_cmd && branches[bi].inline_cmd[0]) {
                         int rc_line = exec_line(branches[bi].inline_cmd);
-                        if (rc_line == 2) exec_rc = OSH_SCRIPT_EXIT;
+                        if (rc_line == OSH_SCRIPT_EXIT) exec_rc = OSH_SCRIPT_EXIT;
+                        else if (rc_line == 2) exec_rc = OSH_SCRIPT_EXIT;
                         else if (rc_line == OSH_SCRIPT_ABORT) exec_rc = OSH_SCRIPT_ABORT;
                     } else if (!branches[bi].inline_cmd) {
                         exec_rc = osh_exec_range(C, branches[bi].body_start, branches[bi].body_end);
@@ -800,6 +803,7 @@ static int osh_exec_range(osh_script_ctx* C, int L, int R) {
                         memcpy(inner, openb + 1, (size_t)ilen);
                         inner[ilen] = '\0';
                         int rc_line = exec_line(inner);
+                        if (rc_line == OSH_SCRIPT_EXIT) return OSH_SCRIPT_EXIT;
                         if (rc_line == 2) return OSH_SCRIPT_EXIT;
                         if (rc_line == OSH_SCRIPT_ABORT) return OSH_SCRIPT_ABORT;
                     }
@@ -920,7 +924,8 @@ static int osh_exec_range(osh_script_ctx* C, int L, int R) {
         }
 
         int rc = exec_line(s0);
-        if (rc == 2) return OSH_SCRIPT_EXIT;
+        if (rc == OSH_SCRIPT_EXIT) return OSH_SCRIPT_EXIT;
+        if (rc == 2) return 2;
         if (rc == OSH_SCRIPT_ABORT) return OSH_SCRIPT_ABORT;
         li++;
         if (li == prev_li) li++;
@@ -1062,6 +1067,21 @@ static int bi_osh(cmd_ctx *c) {
     if ((size_t)r >= 3 && (unsigned char)buf[0]==0xEF && (unsigned char)buf[1]==0xBB && (unsigned char)buf[2]==0xBF) {
         start_off = 3;
     }
+    // normalize patterns like "} else" to break onto new line to simplify parsing
+    for (ssize_t idx = (ssize_t)start_off; idx < r - 4; idx++) {
+        if (buf[idx] == '}') {
+            ssize_t j = idx + 1;
+            // skip single space/tabs; replace the first whitespace before 'else' with newline
+            if (j < r && (buf[j] == ' ' || buf[j] == '\t')) {
+                ssize_t k = j;
+                while (k < r && (buf[k] == ' ' || buf[k] == '\t')) k++;
+                if (k < r && strncmp(&buf[k], "else", 4) == 0) {
+                    buf[j] = '\n';
+                    for (ssize_t m = j + 1; m < k; m++) buf[m] = ' ';
+                }
+            }
+        }
+    }
     // split into lines
     int nlines = 0; for (ssize_t i=(ssize_t)start_off; i<r; i++) if (buf[i]=='\n') nlines++;
     nlines += 1;
@@ -1128,9 +1148,12 @@ static int bi_osh(cmd_ctx *c) {
     // Execute using top-level script engine
     osh_script_ctx CTX = { .lines = lines, .nlines = nlines, .funcs = funcs, .nfuncs = nfuncs };
     {
+        g_script_depth++;
         int status = osh_exec_range(&CTX, 0, nlines);
+        g_script_depth--;
         for (int j=0;j<nfuncs;j++){ for(int k=0;k<funcs[j].pc;k++) if(funcs[j].params[k]) kfree(funcs[j].params[k]); }
         kfree(lines); kfree(line_len); kfree(buf);
+        if (status == OSH_SCRIPT_EXIT) status = 0;
         if (status == OSH_SCRIPT_ABORT) {
             status = 130;
         }
@@ -1466,7 +1489,10 @@ static int exec_simple(char **argv, int argc, const char *in, char **out, size_t
             }
         }
     }
-    if (strcmp(argv[0], "exit") == 0) return 2; // special code to exit shell loop
+    if (strcmp(argv[0], "exit") == 0) {
+        if (g_script_depth > 0) return OSH_SCRIPT_EXIT;
+        return 2; // exit interactive shell
+    }
     builtin_fn fn = find_builtin(argv[0]);
     if (!fn) { kprintf("<(0c)>osh: %s: command not found\n", argv[0]); return 1; }
     cmd_ctx c = { .argv=argv, .argc=argc, .in=in, .out=out, .out_len=out_len, .out_cap=out_cap };
@@ -1512,6 +1538,11 @@ static int exec_pipeline(token *toks, int l, int r, const char *stdin_data, char
             if (stage_out) kfree(stage_out);
             if (cur_out) kfree(cur_out);
             return 2;
+        }
+        if (rc == OSH_SCRIPT_EXIT) {
+            if (stage_out) kfree(stage_out);
+            if (cur_out) kfree(cur_out);
+            return OSH_SCRIPT_EXIT;
         }
         if (rc == OSH_SCRIPT_ABORT) {
             if (stage_out) kfree(stage_out);
@@ -1560,6 +1591,7 @@ static int exec_line(const char *line) {
         char *out=NULL; size_t out_len=0,out_cap=0;
         int rc = exec_pipeline(t, i, j, NULL, &out, &out_len, &out_cap);
         if (rc == 2) { free_tokens(t, tn); if (out) kfree(out); return 2; }
+        if (rc == OSH_SCRIPT_EXIT) { free_tokens(t, tn); if (out) kfree(out); return OSH_SCRIPT_EXIT; }
         if (rc == OSH_SCRIPT_ABORT) { free_tokens(t, tn); if (out) kfree(out); return OSH_SCRIPT_ABORT; }
         status = rc;
         // print to screen if there is output (and not redirected)

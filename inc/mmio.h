@@ -124,8 +124,7 @@ struct arp_header {
 } __attribute__((packed));
 
 // Additional E1000 register definitions
-#define E1000_TX_RING_SIZE 32
-#define E1000_RX_RING_SIZE 32
+// Note: ring sizes are defined above. Avoid duplicate defines here.
 
 // Additional control bits
 #define E1000_RCTL_SZ_2048_ALT (0 << 16) // Alternative definition
@@ -142,6 +141,16 @@ void e1000_handle_interrupt(void);
 // Network functions
 void net_ping(const char* ip_str);
 void net_send_arp(const char* ip_str);
+
+// Configure network interface
+void net_set_ip(uint32_t ip_hostorder_le);
+void net_set_dns(uint32_t dns_hostorder_le);
+void net_set_ip_str(const char* ip_str);
+void net_set_dns_str(const char* ip_str);
+
+// Simple packet send API: send raw payload to a server (UDP)
+// Returns number of bytes sent on success, 0 on failure.
+int net_send_to_server(const char* host, uint16_t port, const uint8_t* data, uint16_t len);
 
 // DNS functions
 uint32_t dns_resolve(const char* hostname);

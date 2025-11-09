@@ -3,7 +3,6 @@
 #include <pci.h>
 #include <string.h>
 
-// ?????????? ??????????
 static uint32_t dns_cache_count = 0;
 static uint16_t dns_transaction_id = 0;
 static struct dns_cache_entry dns_cache[DNS_CACHE_SIZE];
@@ -144,7 +143,7 @@ uint32_t dns_resolve(const char* hostname) {
     
     kprintf("<(0f)>Resolving %s via DNS...<(07)>\n", hostname);
     
-    uint8_t packet[512];
+    static uint8_t packet[512];
     struct eth_header* eth = (struct eth_header*)packet;
     struct ip_header* iph = (struct ip_header*)(packet + sizeof(struct eth_header));
     struct udp_header* udp = (struct udp_header*)(packet + sizeof(struct eth_header) + sizeof(struct ip_header));
@@ -154,7 +153,7 @@ uint32_t dns_resolve(const char* hostname) {
     memcpy(eth->src_mac, mac_address, 6);
     eth->ethertype = htons(ETHERTYPE_ARP);
     
-    uint8_t arp_packet[64];
+    static uint8_t arp_packet[64];
     struct eth_header* arp_eth = (struct eth_header*)arp_packet;
     struct arp_header* arp = (struct arp_header*)(arp_packet + sizeof(struct eth_header));
     
@@ -560,7 +559,7 @@ void net_ping(const char* hostname) {
            (dest_ip >> 24) & 0xFF, (dest_ip >> 16) & 0xFF,
            (dest_ip >> 8) & 0xFF, dest_ip & 0xFF);
     
-    uint8_t packet[1024] = {0};
+    static uint8_t packet[1024] = {0};
     struct eth_header* eth = (struct eth_header*)packet;
     struct ip_header* iph = (struct ip_header*)(packet + sizeof(struct eth_header));
     struct icmp_header* icmp = (struct icmp_header*)(packet + sizeof(struct eth_header) + sizeof(struct ip_header));
@@ -608,19 +607,28 @@ void e1000_print_stats(void) {
         return;
     }
     
-    kprintf("<(0f)>=== Network Statistics ===<(07)>\n");
-    kprintf("<(0f)>MAC: %02x:%02x:%02x:%02x:%02x:%02x<(07)>\n", 
+    kprintf("Network Statistics:\n");
+    kprintf("MAC: %02x:%02x:%02x:%02x:%02x:%02x\n", 
            mac_address[0], mac_address[1], mac_address[2],
            mac_address[3], mac_address[4], mac_address[5]);
-    kprintf("<(0f)>IP: 192.168.1.1<(07)>\n");
-    kprintf("<(0f)>DNS: 8.8.8.8<(07)>\n");
-    kprintf("<(0f)>Link: %s<(07)>\n", e1000_link_up() ? "UP" : "DOWN");
-    kprintf("<(0f)>TX: %d packets, %d bytes, %d errors<(07)>\n", tx_packets, tx_bytes, tx_errors);
-    kprintf("<(0f)>RX: %d packets, %d bytes, %d errors<(07)>\n", rx_packets, rx_bytes, rx_errors);
-    kprintf("<(0f)>Protocols: ARP=%d, ICMP=%d, UDP=%d, DNS=%d<(07)>\n", arp_packets, icmp_packets, udp_packets, dns_packets);
-    kprintf("<(0f)>Ring Status: TX Tail=%d, RX Head=%d<(07)>\n", 
-           e1000_read(E1000_TDT), e1000_read(E1000_RDH));
-    kprintf("<(0f)>DNS Cache: %d entries<(07)>\n", dns_cache_count);
+    {
+        uint32_t ip_print = ntohl(ip_address);
+        kprintf("IP: %d.%d.%d.%d\n", 
+               (ip_print >> 24) & 0xFF, (ip_print >> 16) & 0xFF,
+               (ip_print >> 8) & 0xFF, ip_print & 0xFF);
+    }
+    {
+        uint32_t dns_print = ntohl(dns_server);
+        kprintf("DNS: %d.%d.%d.%d\n",
+               (dns_print >> 24) & 0xFF, (dns_print >> 16) & 0xFF,
+               (dns_print >> 8) & 0xFF, dns_print & 0xFF);
+    }
+    kprintf("Link: %s\n", e1000_link_up() ? "UP" : "DOWN");
+    kprintf("TX: %d packets, %d bytes, %d errors\n", tx_packets, tx_bytes, tx_errors);
+    kprintf("RX: %d packets, %d bytes, %d errors\n", rx_packets, rx_bytes, rx_errors);
+    kprintf("Protocols: ARP=%d, ICMP=%d, UDP=%d, DNS=%d\n", arp_packets, icmp_packets, udp_packets, dns_packets);
+    kprintf("Ring Status: TX Tail=%d, RX Head=%d\n", e1000_read(E1000_TDT), e1000_read(E1000_RDH));
+    kprintf("DNS Cache: %d entries\n", dns_cache_count);
 }
 
 void net_test_dns(void) {
@@ -648,5 +656,97 @@ void net_test_dns(void) {
         } else {
             kprintf("<(0f)>%s -> resolution failed<(07)>\n", hosts[i]);
         }
+    }
+}
+
+int net_send_to_server(const char* host, uint16_t port, const uint8_t* data, uint16_t len) {
+    if (!e1000_mmio) {
+        kprintf("<(0f)>E1000 not initialized<(07)>\n");
+        return 0;
+    }
+
+    if (!data || len == 0) return 0;
+
+    uint32_t dest_ip = parse_ip(host);
+    if (dest_ip == 0) {
+        dest_ip = dns_resolve(host);
+        if (dest_ip == 0) {
+            kprintf("<(0f)>Could not resolve destination: %s<(07)>\n", host);
+            return 0;
+        }
+    }
+
+    uint8_t packet[E1000_TX_BUFFER_SIZE];
+    memset(packet, 0, sizeof(packet));
+
+    struct eth_header* eth = (struct eth_header*)packet;
+    struct ip_header* iph = (struct ip_header*)(packet + sizeof(struct eth_header));
+    struct udp_header* udp = (struct udp_header*)(packet + sizeof(struct eth_header) + sizeof(struct ip_header));
+    uint8_t* payload = packet + sizeof(struct eth_header) + sizeof(struct ip_header) + sizeof(struct udp_header);
+
+    uint32_t headers_len = sizeof(struct eth_header) + sizeof(struct ip_header) + sizeof(struct udp_header);
+    if (len + headers_len > E1000_TX_BUFFER_SIZE) {
+        kprintf("<(0f)>Payload too large for TX buffer (%d bytes max)<(07)>\n", E1000_TX_BUFFER_SIZE - headers_len);
+        return 0;
+    }
+
+    // Ethernet
+    memcpy(eth->dst_mac, broadcast_mac, 6);
+    memcpy(eth->src_mac, mac_address, 6);
+    eth->ethertype = htons(ETHERTYPE_IP);
+
+    // IP
+    iph->version_ihl = 0x45;
+    iph->tos = 0;
+    iph->total_length = htons(sizeof(struct ip_header) + sizeof(struct udp_header) + len);
+    iph->identification = htons(0);
+    iph->flags_fragment = 0;
+    iph->ttl = 64;
+    iph->protocol = IP_PROTOCOL_UDP;
+    iph->checksum = 0;
+    iph->src_ip = htonl(ip_address);
+    iph->dst_ip = htonl(dest_ip);
+    iph->checksum = calculate_checksum(iph, sizeof(struct ip_header));
+
+    // UDP
+    udp->src_port = htons(12345); // ephemeral source port
+    udp->dst_port = htons(port);
+    udp->length = htons(sizeof(struct udp_header) + len);
+    udp->checksum = 0; // not computing UDP checksum (simple)
+
+    // payload
+    memcpy(payload, data, len);
+
+    uint16_t packet_length = headers_len + len;
+
+    if (e1000_send_packet(packet, packet_length)) {
+        kprintf("<(0f)>Sent %d bytes UDP -> %d.%d.%d.%d:%d<(07)>\n", packet_length,
+                (dest_ip >> 24) & 0xFF, (dest_ip >> 16) & 0xFF,
+                (dest_ip >> 8) & 0xFF, dest_ip & 0xFF, port);
+        return packet_length;
+    } else {
+        kprintf("<(0f)>Failed to send UDP packet to %s<(07)>\n", host);
+        return 0;
+    }
+}
+void net_set_ip(uint32_t ip_hostorder_le) {
+    ip_address = ip_hostorder_le;
+}
+
+void net_set_dns(uint32_t dns_hostorder_le) {
+    dns_server = dns_hostorder_le;
+}
+
+void net_set_ip_str(const char* ip_str) {
+    uint32_t p = parse_ip(ip_str);
+    if (p != 0) {
+        ip_address = htonl(p);
+    }
+}
+
+void net_set_dns_str(const char* ip_str) {
+    uint32_t p = parse_ip(ip_str);
+    if (p != 0) {
+        dns_server = htonl(p);
     }
 }

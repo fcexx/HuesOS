@@ -17,6 +17,7 @@
 #define PG_ACCESSED              (1ULL << 5)
 #define PG_DIRTY                 (1ULL << 6)
 #define PG_PS_2M                 (1ULL << 7)   // set in PD entry for 2MiB page
+#define PG_PS_1G                 PG_PS_2M      // same bit used in PDP entry for 1GiB page
 #define PG_GLOBAL                (1ULL << 8)
 #define PG_NX                    (1ULL << 63)  // if EFER.NXE is enabled
 
@@ -32,5 +33,7 @@ int unmap_page_2m(uint64_t va);
 
 // Invalidate TLB for given virtual address
 void invlpg(void* va);
+
+uint64_t paging_virt_to_phys(uint64_t va);
 
 

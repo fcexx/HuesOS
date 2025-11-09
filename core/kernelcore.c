@@ -17,13 +17,13 @@
 #include <thread.h>
 #include <neofetch.h>
 #include <axosh.h>
-
 #include <iothread.h>
 #include <fs.h>
 #include <ext2.h>
 #include <ramfs.h>
 #include <editor.h>
 #include <intel_chipset.h>
+#include <mmio.h>
 
 int exit = 0;
 
@@ -182,6 +182,10 @@ void ascii_art() {
     kprintf("<(0f)>\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xDB\xDB\xDB\xDB\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1<(0b)>\xB0\xB0\xB1\xB2\xDB\xDB\xDB\xDB\xDB\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xDB\xDB\xDB\xDB\xDB\xDB\xB2\xB1\xB0\n\n");
 }
 
+void kb_null() {
+    (void)inb(0x60);
+}
+
 void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {
     kclear();
     kprint("Initializing kernel...\n");
@@ -204,21 +208,35 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {
     /* Регистрируем файловую систему */
     ramfs_register();
     ext2_register();
+    e1000_init();
 
     ps2_keyboard_init();
+    //idt_set_handler(33, kb_null);
     rtc_init();
     
     asm volatile("sti");
 
-    kprintf("kernel base: done\n");
+    kprintf("kernel base: done (idt, gdt, pic, pit, pci, rtc, paging, heap, keyboard)\n");
 
-    static const char license_text[] = "#!osh\n"
-
-"hostname=\"<(0f)>axonos<(07)>\"\n"
-"PS1=\"$hostname:[\\w]> \"\n"
-"osh\n"
-"shutdown\n";
-    struct fs_file *license_file = fs_create_file("/start");
+    static const char license_text[] =
+"MIT License\n"
+"Copyright (c) 2025 The Axon Team\n\n"
+"Permission is hereby granted, free of charge, to any person obtaining a copy\n"
+"of this software and associated documentation files (the 'Software'), to deal\n"
+"in the Software without restriction, including without limitation the rights\n"
+"to use, copy, modify, merge, publish, distribute, sublicense, and/or sell\n"
+"copies of the Software, and to permit persons to whom the Software is\n"
+"furnished to do so, subject to the following conditions:\n\n"
+"The above copyright notice and this permission notice shall be included in all\n"
+"copies or substantial portions of the Software.\n\n"
+"THE SOFTWARE IS PROVIDED 'AS IS', WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\n"
+"IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\n"
+"FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\n"
+"AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\n"
+"LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\n"
+"OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\n"
+"SOFTWARE.\n";
+    struct fs_file *license_file = fs_create_file("/LICENSE");
     if (license_file) {
         fs_write(license_file, license_text, strlen(license_text), 0);
         fs_file_free(license_file);

@@ -22,6 +22,7 @@ void intel_chipset_reset(void);
 #include "../inc/tetris.h"
 #include "../inc/clock.h"
 #include "../inc/neofetch.h"
+#include "../inc/mmio.h"
 #include "../inc/sysinfo.h"
 
 typedef long ssize_t;
@@ -1318,252 +1319,83 @@ static int bi_osh(cmd_ctx *c) {
     int idx = 0; char *line = buf + start_off; ssize_t i = (ssize_t)start_off;
     for (; i < r; i++) {
         if (buf[i] == '\r') { buf[i] = '\0'; }
-        else if (buf[i] == '\n') { buf[i] = '\0'; lines[idx] = line; line_len[idx] = (int)strlen(line); idx++; line = buf + i + 1; }
-    }
-    if (*line) { lines[idx] = line; line_len[idx] = (int)strlen(line); idx++; }
-    nlines = idx;
-
-    // --- simple function table (pass 1) ---
-    osh_func_def funcs[32]; int nfuncs = 0;
-    for (int li=0; li<nlines; li++) {
-        char *s = lines[li]; while (*s==' '||*s=='\t') s++;
-        if (!*s || *s=='#') continue;
-        // function header: name(arg1, arg2) {
-        char name[32]; int ni=0;
-        const char* p = s;
-        while ((*p=='_'||(*p>='a'&&*p<='z')||(*p>='A'&&*p<='Z')) && ni<31) { name[ni++]=*p++; }
-        name[ni]='\0';
-        if (ni>0 && *p=='(') {
-            p++;
-            // parse params
-            char *params[8]; int pc=0;
-            char token[32]; int ti=0;
-            int ok = 0;
-            while (*p && *p != ')') {
-                if (*p==' '||*p=='\t') { p++; continue; }
-                if (*p==',') { p++; continue; }
-                // ident
-                ti=0;
-                if ((*p=='_'||(*p>='a'&&*p<='z')||(*p>='A'&&*p<='Z'))) {
-                    while ((*p=='_'||(*p>='a'&&*p<='z')||(*p>='A'&&*p<='Z')||(*p>='0'&&*p<='9')) && ti<31) token[ti++]=*p++;
-                    token[ti]='\0';
-                    if (pc<8) { params[pc]=(char*)kcalloc(strlen(token)+1,1); memcpy(params[pc], token, strlen(token)+1); pc++; }
-                } else { break; }
+        else if (buf[i] == '\n') { buf[i] = '\0';
+            char *s = line; while (*s==' '||*s=='\t') s++;
+            if (*s && *s != '#') {
+                int rc = exec_line(s);
+                if (rc == 2) { status = 0; kfree(buf); return 0; }
+                status = rc;
             }
-            if (*p==')') { p++; while (*p==' '||*p=='\t') p++; if (*p=='{') { ok=1; } }
-            if (ok) {
-                // find matching }
-                int depth = 0; int start = li+1; int end = nlines;
-                for (int lj=li; lj<nlines; lj++) {
-                    char *t = lines[lj]; while (*t==' '||*t=='\t') t++;
-                    for (char *q=t; *q; q++) { if (*q=='{') depth++; else if (*q=='}') { depth--; if (depth==0) { end = lj; goto found_end; } } }
-                }
-            found_end:
-                if (nfuncs < 32) {
-                    strncpy(funcs[nfuncs].name, name, sizeof(funcs[nfuncs].name)-1);
-                    funcs[nfuncs].pc = pc;
-                    funcs[nfuncs].header = li;
-                    for (int k=0;k<pc;k++) funcs[nfuncs].params[k]=params[k];
-                    funcs[nfuncs].start = start;
-                    funcs[nfuncs].end   = end;
-                    nfuncs++;
-                }
-                li = end; // skip body
-            }
+            line = buf + i + 1;
         }
     }
-
-    // Execute using top-level script engine
-    osh_script_ctx CTX = { .lines = lines, .nlines = nlines, .funcs = funcs, .nfuncs = nfuncs };
-    {
-        osh_script_ctx* prev_ctx = g_active_script_ctx;
-        g_active_script_ctx = &CTX;
-        g_script_depth++;
-        int status = osh_exec_range(&CTX, 0, nlines);
-        g_script_depth--;
-        g_active_script_ctx = prev_ctx;
-        for (int j=0;j<nfuncs;j++){ for(int k=0;k<funcs[j].pc;k++) if(funcs[j].params[k]) kfree(funcs[j].params[k]); }
-        kfree(lines); kfree(line_len); kfree(buf);
-        if (status == OSH_SCRIPT_EXIT) status = 0;
-        if (status == OSH_SCRIPT_ABORT) {
-            status = 130;
-        }
-        if (status == OSH_SCRIPT_RETURN) status = 0;
-        return status;
+    // last line if not newline-terminated
+    if (*line) {
+        char *s = line; while (*s==' '||*s=='\t') s++;
+        if (*s && *s != '#') { int rc = exec_line(s); if (rc == 2) { status = 0; kfree(buf); return 0; } status = rc; }
     }
-
-#if 0
-    // helpers
-    auto int find_func(const char* nm) -> int {
-        for (int i2=0;i2<nfuncs;i2++) if (strcmp(funcs[i2].name, nm)==0) return i2; return -1;
-    }
-    auto int exec_range(int L, int R) -> int; // fwd
-    auto int eval_cond(const char* expr) -> int {
-        // support: a op b, where op in == != <= >= < >
-        // Expand vars in expr
-        char *ex = expand_vars(expr);
-        const char* e = ex ? ex : expr;
-        const char* ops[] = {"==","!=", "<=", ">=", "<", ">"};
-        int which = -1; int pos = -1;
-        for (int k=0;k<6;k++) {
-            const char* o = ops[k];
-            const char* p = strstr(e, o);
-            if (p) { which=k; pos=(int)(p - e); break; }
-        }
-        int res = 0;
-        if (which >= 0) {
-            char left[256], right[256];
-            int ln = pos; if (ln>255) ln=255; memcpy(left, e, ln); left[ln]='\0';
-            const char* rp = e + pos + (ops[which][1] ? 2 : 1);
-            while (*rp==' ') rp++;
-            strncpy(right, rp, sizeof(right)-1); right[sizeof(right)-1]='\0';
-            // trim left trailing spaces
-            int ll=(int)strlen(left); while (ll>0 && (left[ll-1]==' '||left[ll-1]=='\t')) left[--ll]='\0';
-            // try numeric
-            const char* pl = left; const char* pr = right;
-            double lv = osh_parse_expr(&pl);
-            double rv = osh_parse_expr(&pr);
-            // If parsers consumed nothing, fallback to string
-            int numeric = 1;
-            // basic compare with tolerance
-            double eps = 1e-9;
-            switch (which) {
-                case 0: res = (lv - rv < eps && rv - lv < eps); break; // ==
-                case 1: res = ! (lv - rv < eps && rv - lv < eps); break; // !=
-                case 2: res = (lv <= rv + eps); break; // <=
-                case 3: res = (lv + eps >= rv); break; // >=
-                case 4: res = (lv < rv - eps); break; // <
-                case 5: res = (lv > rv + eps); break; // >
-            }
-        } else {
-            // Non-empty after expansion -> true
-            res = (e && *e);
-        }
-        if (ex) kfree(ex);
-        return res;
-    }
-    auto void call_func(int fi, char** args, int ac) -> void {
-        // save old values and set params
-        const int pc = funcs[fi].pc;
-        char* saved_names[8]; char* saved_vals[8];
-        for (int i2=0;i2<pc && i2<8;i2++){
-            const char* pname = funcs[fi].params[i2];
-            // save
-            saved_names[i2] = (char*)pname;
-            const char* old = var_get(pname);
-            saved_vals[i2] = old ? (char*)old : NULL;
-            // set new
-            var_set(pname, (i2<ac && args[i2]) ? args[i2] : "");
-        }
-        (void)exec_range(funcs[fi].start, funcs[fi].end);
-        // restore: no need to free saved_vals (pointed to internal storage)
-        for (int i2=0;i2<pc && i2<8;i2++){
-            const char* pname = saved_names[i2];
-            if (saved_vals[i2]) var_set(pname, saved_vals[i2]);
-            else var_set(pname, "");
-        }
-    }
-    auto int exec_range(int L, int R) -> int {
-        int li=L;
-        while (li<R) {
-            char *s0 = lines[li]; while (*s0==' '||*s0=='\t') s0++;
-            if (!*s0 || *s0=='#') { li++; continue; }
-            // if / else-if / else chain
-            if (strncmp(s0, "if ", 3)==0) {
-                // expect {...}
-                char *cond = s0 + 3;
-                // find block
-                int depth = 0; int bstart = -1; int bend = -1; int cur = li;
-                for (; cur<R; cur++) {
-                    char *t = lines[cur]; while (*t==' '||*t=='\t') t++;
-                    for (char* q=t; *q; q++){ if (*q=='{'){ depth++; if (depth==1) bstart = cur+1; } else if(*q=='}'){ depth--; if(depth==0){ bend = cur; goto got_if_block; } } }
-                }
-            got_if_block:
-                int taken = eval_cond(cond);
-                int after = bend + 1;
-                if (taken) { (void)exec_range(bstart, bend); }
-                else {
-                    // check else if / else
-                    int consumed = 0;
-                    while (after < R) {
-                        char *t = lines[after]; while (*t==' '||*t=='\t') t++;
-                        if (strncmp(t, "else if ", 8)==0) {
-                            // parse its block
-                            char *c2 = t + 8;
-                            int d2=0, s2=-1, e2=-1, w=after;
-                            for (; w<R; w++){ char *u=lines[w]; while(*u==' '||*u=='\t') u++; for(char* q=u;*q;q++){ if(*q=='{'){ d2++; if(d2==1) s2=w+1; } else if(*q=='}'){ d2--; if(d2==0){ e2=w; goto got_elseif; } } } }
-                        got_elseif:
-                            if (eval_cond(c2)) { (void)exec_range(s2, e2); consumed = e2 - li + 1; after = e2 + 1; break; }
-                            else { after = e2 + 1; }
-                        } else if (strncmp(t, "else", 4)==0) {
-                            // expect { block }
-                            int d3=0, s3=-1, e3=-1, w=after;
-                            for (; w<R; w++){ char *u=lines[w]; while(*u==' '||*u=='\t') u++; for(char* q=u;*q;q++){ if(*q=='{'){ d3++; if(d3==1) s3=w+1; } else if(*q=='}'){ d3--; if(d3==0){ e3=w; goto got_else; } } } }
-                        got_else:
-                            (void)exec_range(s3, e3); consumed = e3 - li + 1; after = e3 + 1; break;
-                        } else break;
-                    }
-                    if (!consumed) { /* nothing executed */ }
-                }
-                li = after;
-                continue;
-            }
-            // while <cond> { ... }
-            if (strncmp(s0, "while ", 6)==0) {
-                char *cond = s0 + 6;
-                int depth=0, bstart=-1, bend=-1, cur=li;
-                for (; cur<R; cur++) {
-                    char *t = lines[cur]; while (*t==' '||*t=='\t') t++;
-                    for (char* q=t; *q; q++){ if(*q=='{'){ depth++; if(depth==1) bstart=cur+1; } else if(*q=='}'){ depth--; if(depth==0){ bend=cur; goto got_while; } } }
-                }
-            got_while:
-                // naive loop guard to avoid hanging
-                int iter = 0;
-                while (eval_cond(cond)) {
-                    (void)exec_range(bstart, bend);
-                    if (++iter > 100000) break;
-                }
-                li = bend + 1;
-                continue;
-            }
-            // function call: name(arg,...)
-            {
-                char name[32]; int ni2=0; const char* p2=s0;
-                while ((*p2=='_'||(*p2>='a'&&*p2<='z')||(*p2>='A'&&*p2<='Z')) && ni2<31) { name[ni2++]=*p2++; }
-                name[ni2]='\0';
-                if (ni2>0 && *p2=='(') {
-                    int fi = find_func(name);
-                    if (fi >= 0) {
-                        p2++;
-                        char *args[8]; int ac=0;
-                        char token[256]; int ti=0; int inq=0;
-                        while (*p2 && *p2 != ')') {
-                            if (!inq && (*p2==',')) {
-                                token[ti]='\0'; args[ac]=(char*)kcalloc(strlen(token)+1,1); memcpy(args[ac], token, strlen(token)+1); ac++; ti=0; p2++; continue;
-                            }
-                            if (*p2=='"') { inq = !inq; p2++; continue; }
-                            if (ti < (int)sizeof(token)-1) token[ti++]=*p2++;
-                            else p2++;
-                        }
-                        token[ti]='\0'; if (ti||ac) { args[ac]=(char*)kcalloc(strlen(token)+1,1); memcpy(args[ac], token, strlen(token)+1); ac++; }
-                        call_func(fi, args, ac);
-                        for (int i3=0;i3<ac;i3++) if (args[i3]) kfree(args[i3]);
-                        li++; continue;
-                    }
-                }
-            }
-            // plain command
-            int rc = exec_line(s0);
-            if (rc == 2) { /* exit shell */ for (int j=0;j<nfuncs;j++){ for(int k=0;k<funcs[j].pc;k++) if(funcs[j].params[k]) kfree(funcs[j].params[k]); } kfree(lines); kfree(line_len); kfree(buf); return 0; }
-            li++;
-        }
-        return 0;
-    }
-    int status = exec_range(0, nlines);
-    for (int j=0;j<nfuncs;j++){ for(int k=0;k<funcs[j].pc;k++) if(funcs[j].params[k]) kfree(funcs[j].params[k]); }
-    kfree(lines); kfree(line_len); kfree(buf);
+    kfree(buf);
     return status;
-#endif
+}
+static int bi_netstat(cmd_ctx *c) {
+    (void)c;
+    
+    if (!e1000_mmio) {
+        kprintf("Network adapter not initialized\n");
+        return 1;
+    }
+    
+    e1000_print_stats();
+    return 0;
+}
+
+static int bi_ping(cmd_ctx *c) {
+    if (c->argc < 2) {
+        kprintf("Usage: ping <ip>\n");
+        kprintf("Example: ping 192.168.1.1\n");
+        return 1;
+    }
+    
+    if (!e1000_mmio) {
+        kprintf("Network adapter not initialized\n");
+        return 1;
+    }
+    
+    net_ping(c->argv[1]);
+    return 0;
+}
+
+static int bi_net_test(cmd_ctx *c) {
+    (void)c;
+    
+    if (!e1000_mmio) {
+        kprintf("Network adapter not initialized\n");
+        return 1;
+    }
+    
+    kprintf("Network test:\n");
+    
+    // Test transmission
+    uint8_t test_packet[64];
+    memset(test_packet, 0xAA, sizeof(test_packet));
+    
+    if (e1000_send_packet(test_packet, sizeof(test_packet))) {
+        kprintf("  TX: OK\n");
+    } else {
+        kprintf("  TX: FAILED\n");
+    }
+    
+    // Test reception
+    uint8_t rx_buffer[2048];
+    uint16_t rx_length;
+    
+    if (e1000_receive_packet(rx_buffer, &rx_length)) {
+        kprintf("  RX: OK (%d bytes)\n", rx_length);
+    } else {
+        kprintf("  RX: No packets\n");
+    }
+    
+    return 0;
 }
 static int bi_pause(cmd_ctx *c){ (void)c; kprintf("Press any key to continue...\n"); kgetc(); return 0;}
 static int bi_chipset(cmd_ctx *c) {
@@ -1631,7 +1463,8 @@ static const builtin builtin_table[] = {
     {"about", bi_about}, {"time", bi_time}, {"date", bi_date}, {"uptime", bi_uptime},
     {"edit", bi_edit}, {"snake", bi_snake}, {"tetris", bi_tetris}, {"clock", bi_clock},
     {"reboot", bi_reboot}, {"shutdown", bi_shutdown}, {"neofetch", bi_neofetch}, {"mem", bi_mem},
-    {"osh", bi_osh}, {"art", bi_art}, {"pause", bi_pause}, {"chipset", bi_chipset}, {"help", bi_help},
+    {"osh", bi_osh}, {"art", bi_art}, {"pause", bi_pause}, {"chipset", bi_chipset}, {"ping", bi_ping},
+    {"netstat", bi_netstat}, {"net", bi_net_test} {"help", bi_help},
 };
 
 static builtin_fn find_builtin(const char* name) {

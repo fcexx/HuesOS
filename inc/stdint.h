@@ -16,6 +16,9 @@
 
 #define UINT32_MAX 0xFFFFFFFF
 #define UINT64_MAX 0xFFFFFFFFFFFFFFFF
+#ifndef SIZE_MAX
+#define SIZE_MAX UINT64_MAX
+#endif
 
 /* stdint types */
 typedef unsigned char       uint8_t;

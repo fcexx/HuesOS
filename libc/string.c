@@ -1,5 +1,6 @@
 #include <string.h>
 #include <heap.h>
+#include <stdarg.h>
 
 // Вычисляет длину строки
 size_t strlen(const char* str) {
@@ -352,6 +353,67 @@ int trim(char* str) {
         return 1;
 }
 
+static int kvsnprintf(char* buf, size_t size, const char* fmt, va_list ap) {
+        size_t pos = 0;
+        if (size == 0) return 0;
+        for (const char* p = fmt; *p; ++p) {
+                if (*p != '%') {
+                        if (pos + 1 < size) buf[pos] = *p;
+                        pos++;
+                        continue;
+                }
+                ++p;
+                if (*p == 's') {
+                        const char* s = va_arg(ap, const char*);
+                        if (!s) s = "(null)";
+                        while (*s) {
+                                if (pos + 1 < size) buf[pos] = *s;
+                                pos++; s++;
+                        }
+                } else if (*p == 'd' || *p == 'u') {
+                        int v = va_arg(ap, int);
+                        char tmp[32]; int neg = 0;
+                        unsigned int uv;
+                        if (*p == 'd' && v < 0) { neg = 1; uv = (unsigned int)(-v); }
+                        else { uv = (unsigned int)v; }
+                        int i = 0;
+                        do { tmp[i++] = (char)('0' + (uv % 10)); uv /= 10; } while (uv && i < (int)sizeof(tmp));
+                        if (neg) tmp[i++] = '-';
+                        while (i--) {
+                                if (pos + 1 < size) buf[pos] = tmp[i];
+                                pos++;
+                        }
+                } else if (*p == 'c') {
+                        char c = (char)va_arg(ap, int);
+                        if (pos + 1 < size) buf[pos] = c;
+                        pos++;
+                } else if (*p == '%') {
+                        if (pos + 1 < size) buf[pos] = '%';
+                        pos++;
+                } else {
+                        /* unsupported, print literally */
+                        if (pos + 1 < size) buf[pos] = '%';
+                        pos++;
+                        if (pos + 1 < size) buf[pos] = *p;
+                        pos++;
+                }
+        }
+        if (pos < size) buf[pos] = '\0';
+        else buf[size - 1] = '\0';
+        return (int)pos;
+}
+
+int vsnprintf(char* buf, size_t size, const char* fmt, va_list ap) {
+        return kvsnprintf(buf, size, fmt, ap);
+}
+
+int snprintf(char* buf, size_t size, const char* fmt, ...) {
+        va_list ap;
+        va_start(ap, fmt);
+        int n = kvsnprintf(buf, size, fmt, ap);
+        va_end(ap);
+        return n;
+}
 // Реализация strtok
 static char* strtok_save = NULL;
 

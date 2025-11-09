@@ -17,13 +17,13 @@
 #include <thread.h>
 #include <neofetch.h>
 #include <axosh.h>
-
 #include <iothread.h>
 #include <fs.h>
 #include <ext2.h>
 #include <ramfs.h>
 #include <editor.h>
 #include <intel_chipset.h>
+#include <mmio.h>
 
 int exit = 0;
 
@@ -204,6 +204,7 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {
     /* Регистрируем файловую систему */
     ramfs_register();
     ext2_register();
+    e1000_init();
 
     ps2_keyboard_init();
     rtc_init();

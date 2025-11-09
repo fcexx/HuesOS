@@ -144,7 +144,7 @@ uint32_t dns_resolve(const char* hostname) {
     
     kprintf("<(0f)>Resolving %s via DNS...<(07)>\n", hostname);
     
-    uint8_t packet[512];
+    static uint8_t packet[512];
     struct eth_header* eth = (struct eth_header*)packet;
     struct ip_header* iph = (struct ip_header*)(packet + sizeof(struct eth_header));
     struct udp_header* udp = (struct udp_header*)(packet + sizeof(struct eth_header) + sizeof(struct ip_header));
@@ -154,7 +154,7 @@ uint32_t dns_resolve(const char* hostname) {
     memcpy(eth->src_mac, mac_address, 6);
     eth->ethertype = htons(ETHERTYPE_ARP);
     
-    uint8_t arp_packet[64];
+    static uint8_t arp_packet[64];
     struct eth_header* arp_eth = (struct eth_header*)arp_packet;
     struct arp_header* arp = (struct arp_header*)(arp_packet + sizeof(struct eth_header));
     
@@ -560,7 +560,7 @@ void net_ping(const char* hostname) {
            (dest_ip >> 24) & 0xFF, (dest_ip >> 16) & 0xFF,
            (dest_ip >> 8) & 0xFF, dest_ip & 0xFF);
     
-    uint8_t packet[1024] = {0};
+    static uint8_t packet[1024] = {0};
     struct eth_header* eth = (struct eth_header*)packet;
     struct ip_header* iph = (struct ip_header*)(packet + sizeof(struct eth_header));
     struct icmp_header* icmp = (struct icmp_header*)(packet + sizeof(struct eth_header) + sizeof(struct ip_header));
@@ -608,19 +608,18 @@ void e1000_print_stats(void) {
         return;
     }
     
-    kprintf("<(0f)>=== Network Statistics ===<(07)>\n");
-    kprintf("<(0f)>MAC: %02x:%02x:%02x:%02x:%02x:%02x<(07)>\n", 
+    kprintf("Network Statistics:\n");
+    kprintf("MAC: %02x:%02x:%02x:%02x:%02x:%02x\n", 
            mac_address[0], mac_address[1], mac_address[2],
            mac_address[3], mac_address[4], mac_address[5]);
-    kprintf("<(0f)>IP: 192.168.1.1<(07)>\n");
-    kprintf("<(0f)>DNS: 8.8.8.8<(07)>\n");
-    kprintf("<(0f)>Link: %s<(07)>\n", e1000_link_up() ? "UP" : "DOWN");
-    kprintf("<(0f)>TX: %d packets, %d bytes, %d errors<(07)>\n", tx_packets, tx_bytes, tx_errors);
-    kprintf("<(0f)>RX: %d packets, %d bytes, %d errors<(07)>\n", rx_packets, rx_bytes, rx_errors);
-    kprintf("<(0f)>Protocols: ARP=%d, ICMP=%d, UDP=%d, DNS=%d<(07)>\n", arp_packets, icmp_packets, udp_packets, dns_packets);
-    kprintf("<(0f)>Ring Status: TX Tail=%d, RX Head=%d<(07)>\n", 
-           e1000_read(E1000_TDT), e1000_read(E1000_RDH));
-    kprintf("<(0f)>DNS Cache: %d entries<(07)>\n", dns_cache_count);
+    kprintf("IP: 192.168.1.1\n");
+    kprintf("DNS: 8.8.8.8\n");
+    kprintf("Link: %s\n", e1000_link_up() ? "UP" : "DOWN");
+    kprintf("TX: %d packets, %d bytes, %d errors\n", tx_packets, tx_bytes, tx_errors);
+    kprintf("RX: %d packets, %d bytes, %d errors\n", rx_packets, rx_bytes, rx_errors);
+    kprintf("Protocols: ARP=%d, ICMP=%d, UDP=%d, DNS=%d\n", arp_packets, icmp_packets, udp_packets, dns_packets);
+    kprintf("Ring Status: TX Tail=%d, RX Head=%d\n", e1000_read(E1000_TDT), e1000_read(E1000_RDH));
+    kprintf("DNS Cache: %d entries\n", dns_cache_count);
 }
 
 void net_test_dns(void) {

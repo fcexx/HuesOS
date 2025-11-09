@@ -10,6 +10,7 @@ extern "C" {
 // Строковый редактор для osh: история, редактирование, подсказки (Tab)
 // Возвращает длину введённой строки (>=0) или -1 при ошибке/ESC.
 int osh_line_read(const char* prompt, const char* cwd, char* out, int out_size);
+int osh_line_was_ctrlc(void);
 
 void osh_history_init(void);
 void osh_history_add(const char* line);

@@ -67,6 +67,7 @@ static const char scancode_to_ascii_shift[128] = {
 static volatile bool shift_pressed = false;
 static volatile bool ctrl_pressed = false;
 static volatile bool alt_pressed = false;
+static volatile bool ctrlc_pending = false;
 
 // Добавить символ в буфер
 static void add_to_buffer(char c) {
@@ -203,6 +204,9 @@ void keyboard_process_scancode(uint8_t scancode) {
                                                         c = (char)(uc - 'A' + 1);
                                                 }
                                         }
+                                if (c == 3) {
+                                        ctrlc_pending = true;
+                                }
                                         add_to_buffer(c);
                                         //qemu_debug_printf("kbd: char '%c' (0x%02x) -> buffer_count=%d\n", c, (unsigned char)c, buffer_count);
                                 }
@@ -261,6 +265,18 @@ char kgetc() {
 // Проверить, есть ли доступные символы (неблокирующая)
 int kgetc_available() {
         return buffer_count;
+}
+
+int keyboard_ctrlc_pending(void) {
+        return ctrlc_pending ? 1 : 0;
+}
+
+int keyboard_consume_ctrlc(void) {
+        if (ctrlc_pending) {
+                ctrlc_pending = false;
+                return 1;
+        }
+        return 0;
 }
 
 // Убрана локальная реализация автодополнения — используется глобальная в sys_read

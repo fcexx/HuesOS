@@ -501,3 +501,62 @@ void draw_cell(uint8_t x, uint8_t y, uint8_t ch, uint8_t color) {
 void draw_text(uint8_t x, uint8_t y, const char* s, uint8_t color) {
     for (uint8_t i = 0; s[i]; i++) draw_cell(x + i, y, (uint8_t)s[i], color);
 }
+
+// ---- minimal printf-to-buffer (vsnprintf/snprintf/sprintf) ----
+typedef struct { char* buf; size_t cap; size_t len; } __bufw;
+static void __bw_putc(__bufw* w, char ch) {
+	if (w->len + 1 < w->cap) w->buf[w->len] = ch;
+	w->len++;
+}
+
+static int __vsnprintf(char* out, size_t outsz, const char* fmt, va_list ap_in) {
+	if (!out || outsz==0) return 0;
+	__bufw W = { .buf = out, .cap = outsz, .len = 0 };
+	va_list ap; va_copy(ap, ap_in);
+	for (const char *p = fmt; *p; ) {
+		if (*p != '%') { __bw_putc(&W, *p++); continue; }
+		p++;
+		// flags (ignored mostly)
+		while (*p=='-'||*p=='+'||*p==' '||*p=='#'||*p=='0') p++;
+		// width
+		if (*p=='*') { (void)va_arg(ap,int); p++; } else { while (*p>='0'&&*p<='9') p++; }
+		// precision
+		if (*p=='.') { p++; if (*p=='*'){ (void)va_arg(ap,int); p++; } else { while (*p>='0'&&*p<='9') p++; } }
+		// length
+		if (*p=='h'||*p=='l'||*p=='z') { if ((p[0]=='h'&&p[1]=='h')||(p[0]=='l'&&p[1]=='l')) p+=2; else p++; }
+		char spec = *p ? *p++ : '\0';
+		char tmp[64]; int n=0;
+		switch (spec) {
+			case 'c': { int ch=va_arg(ap,int); __bw_putc(&W,(char)ch); break; }
+			case 's': { const char* s=va_arg(ap,const char*); if(!s)s="(null)"; while(*s) __bw_putc(&W,*s++); break; }
+			case 'd': case 'i': {
+				long long v = va_arg(ap,int);
+				unsigned long long u = (v<0)?(unsigned long long)(-v):(unsigned long long)v;
+				if (u==0) tmp[n++]='0';
+				while(u){ tmp[n++]=(char)('0'+(u%10)); u/=10; }
+				if (v<0) __bw_putc(&W,'-');
+				for (int i=n-1;i>=0;i--) __bw_putc(&W,tmp[i]);
+				break;
+			}
+			case 'u': case 'x': case 'X': {
+				unsigned base = (spec=='u')?10:16; int upper = (spec=='X');
+				unsigned long long u = va_arg(ap,unsigned int);
+				const char* D = upper?"0123456789ABCDEF":"0123456789abcdef";
+				if (u==0) tmp[n++]='0';
+				while(u){ tmp[n++]=D[u%base]; u/=base; }
+				for (int i=n-1;i>=0;i--) __bw_putc(&W,tmp[i]);
+				break;
+			}
+			case '%': __bw_putc(&W,'%'); break;
+			default: __bw_putc(&W,spec); break;
+		}
+	}
+	// NUL
+	if (W.len < W.cap) W.buf[W.len] = '\0'; else W.buf[W.cap-1] = '\0';
+	va_end(ap);
+	return (int)W.len;
+}
+
+int vsnprintf(char* out, size_t outsz, const char* fmt, va_list ap) { return __vsnprintf(out, outsz, fmt, ap); }
+int snprintf(char* out, size_t outsz, const char* fmt, ...) { va_list ap; va_start(ap, fmt); int r=__vsnprintf(out,outsz,fmt,ap); va_end(ap); return r; }
+int sprintf(char* out, const char* fmt, ...) { va_list ap; va_start(ap, fmt); int r=__vsnprintf(out,(size_t)-1,fmt,ap); va_end(ap); return r; }

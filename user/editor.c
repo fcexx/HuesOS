@@ -83,7 +83,7 @@ typedef struct {
 	int modified;
 
 	char filename[256];
-    int syntax_mode; // 0 - none, 1 - asm
+    int syntax_mode; // 0 - none, 1 - asm, 2 - osh
 } Editor;
 
 static void ui_draw_menu(void);
@@ -111,6 +111,7 @@ static int file_save(Editor *E, const char *path);
 // ---- Syntax highlighting (ASM) ----
 static void editor_update_syntax(Editor *E);
 static void draw_line_text_asm(uint32_t y, const char *s, size_t len);
+static void draw_line_text_osh(uint32_t y, const char *s, size_t len);
 
 // ---- Buffer management ----
 static void buf_init(Editor *E) {
@@ -322,6 +323,7 @@ static void ui_draw_view(Editor *E) {
 		if (r >= 0 && r < E->line_count) {
 			Line *L = &E->lines[r];
 			if (E->syntax_mode == 1) draw_line_text_asm(VIEW_Y0 + (uint32_t)i, L->data ? L->data : "", L->len);
+			else if (E->syntax_mode == 2) draw_line_text_osh(VIEW_Y0 + (uint32_t)i, L->data ? L->data : "", L->len);
 			else draw_line_text(VIEW_Y0 + (uint32_t)i, L->data ? L->data : "", L->len);
 		} else {
 			// beyond EOF -> dim tildes like vim
@@ -349,6 +351,14 @@ static int str_ends_with(const char* s, const char* suf) {
 
 static void editor_update_syntax(Editor *E) {
     E->syntax_mode = 0;
+    // detect by shebang first
+    if (E->line_count > 0 && E->lines[0].data && E->lines[0].len >= 5) {
+        const char* l0 = E->lines[0].data;
+        if (l0[0]=='#' && l0[1]=='!' && l0[2]=='o' && l0[3]=='s' && l0[4]=='h') {
+            E->syntax_mode = 2; // OSH script by shebang
+            return;
+        }
+    }
     if (E->filename[0]) {
         if (str_ends_with(E->filename, ".asm") || str_ends_with(E->filename, ".ASM") ||
             str_ends_with(E->filename, ".s")   || str_ends_with(E->filename, ".S")) {
@@ -459,6 +469,82 @@ static void draw_line_text_asm(uint32_t y, const char *s, size_t len) {
         else if (is_asm_directive(s,st,en)) a = attr_mn;
         else if (is_number_start(s,st,len)) a = attr_num;
         for (size_t j=st;j<en && x<VIEW_W;j++,x++) { uint16_t v=((uint16_t)a<<8)|(uint8_t)s[j]; uint32_t iy=y-VIEW_Y0; if (iy<VIEW_H && g_view_cache[iy][x]==v) continue; vga_putch_xy(x,y,(uint8_t)s[j],a); if (iy<VIEW_H) g_view_cache[iy][x]=v; }
+    }
+}
+
+static int is_shell_ident(char c) { return (c=='_' || (c>='0'&&c<='9') || (c>='a'&&c<='z') || (c>='A'&&c<='Z')); }
+static int is_shell_kw(const char* s, size_t st, size_t en) {
+    static const char* K[] = {
+        "echo","pwd","cd","clear","cls","ls","cat","mkdir","touch","rm",
+        "about","time","date","uptime","edit","snake","tetris","clock",
+        "reboot","shutdown","neofetch","osh","art","pause","chipset","help","mem"
+    };
+    size_t L = en - st;
+    for (size_t i=0;i<sizeof(K)/sizeof(K[0]);i++) {
+        const char* k = K[i]; size_t KL = strlen(k);
+        if (KL != L) continue; int ok=1;
+        for (size_t j=0;j<KL;j++){ char a=s[st+j], b=k[j]; if (a>='A'&&a<='Z') a=(char)(a-'A'+'a'); if (a!=b) { ok=0; break; } }
+        if (ok) return 1;
+    }
+    return 0;
+}
+
+static void draw_line_text_osh(uint32_t y, const char *s, size_t len) {
+    uint8_t attr_norm = g_attr_text;
+    uint8_t attr_cmt  = attr_with_fg(g_attr_text, 0x02); // green
+    uint8_t attr_kw   = attr_with_fg(g_attr_text, 0x0B); // cyan
+    uint8_t attr_var  = attr_with_fg(g_attr_text, 0x0D); // magenta
+    uint8_t attr_num  = attr_with_fg(g_attr_text, 0x0C); // red
+    uint8_t attr_str  = attr_with_fg(g_attr_text, 0x0A); // light green
+    uint8_t attr_op   = attr_with_fg(g_attr_text, 0x0E); // yellow
+
+    uint32_t x = 0; size_t i = 0; int in_str = 0;
+    if (!g_view_cache_valid) { for (uint32_t iy=0; iy<VIEW_H; iy++) for (uint32_t ix=0; ix<VIEW_W; ix++) g_view_cache[iy][ix]=0xFFFF; g_view_cache_valid=1; }
+    while (x < VIEW_W) {
+        if (i >= len) { vga_putch_xy(x++, y, ' ', attr_norm); continue; }
+        char c = s[i];
+        if (!in_str && c == '#') { // comment
+            for (; x < VIEW_W && i < len; i++, x++) {
+                uint16_t v = ((uint16_t)attr_cmt<<8) | (uint8_t)s[i];
+                uint32_t iy = y - VIEW_Y0; if (iy < VIEW_H && g_view_cache[iy][x] == v) continue; vga_putch_xy(x,y,(uint8_t)s[i],attr_cmt); if (iy<VIEW_H) g_view_cache[iy][x]=v;
+            }
+            break;
+        }
+        if (!in_str && c == '"') { in_str = 1; vga_putch_xy(x++, y, (uint8_t)c, attr_str); i++; continue; }
+        if (in_str) {
+            uint16_t v = ((uint16_t)attr_str<<8)|(uint8_t)c; uint32_t iy=y-VIEW_Y0; if (iy<VIEW_H && g_view_cache[iy][x]==v) { x++; i++; } else { vga_putch_xy(x++,y,(uint8_t)c,attr_str); if (iy<VIEW_H) g_view_cache[iy][x-1]=v; i++; }
+            if (c == '"') in_str = 0;
+            continue;
+        }
+        // operators
+        if (c=='&' || c=='|' || c=='<' || c=='>' || c=='=' || c=='(' || c==')') {
+            uint16_t v = ((uint16_t)attr_op<<8)|(uint8_t)c; uint32_t iy=y-VIEW_Y0; if (iy<VIEW_H && g_view_cache[iy][x]==v) { x++; i++; } else { vga_putch_xy(x++,y,(uint8_t)c,attr_op); if (iy<VIEW_H) g_view_cache[iy][x-1]=v; i++; } continue;
+        }
+        // whitespace and common punctuation
+        if (c==' ' || c=='\t' || c==',' || c=='+' || c=='-' || c=='/') {
+            uint16_t v = ((uint16_t)attr_norm<<8)|(uint8_t)c; uint32_t iy=y-VIEW_Y0; if (iy<VIEW_H && g_view_cache[iy][x]==v) { x++; i++; } else { vga_putch_xy(x++,y,(uint8_t)c,attr_norm); if (iy<VIEW_H) g_view_cache[iy][x-1]=v; i++; } continue;
+        }
+        // variable $name
+        if (c=='$') {
+            size_t st=i; i++; while (i<len && is_shell_ident(s[i])) i++; size_t en=i;
+            for (size_t j=st;j<en && x<VIEW_W;j++,x++) { uint16_t v=((uint16_t)attr_var<<8)|(uint8_t)s[j]; uint32_t iy=y-VIEW_Y0; if (iy<VIEW_H && g_view_cache[iy][x]==v) continue; vga_putch_xy(x,y,(uint8_t)s[j],attr_var); if (iy<VIEW_H) g_view_cache[iy][x]=v; }
+            continue;
+        }
+        // number
+        if (c>='0'&&c<='9') {
+            size_t st=i; while (i<len && s[i]>='0' && s[i]<='9') i++; size_t en=i;
+            for (size_t j=st;j<en && x<VIEW_W;j++,x++) { uint16_t v=((uint16_t)attr_num<<8)|(uint8_t)s[j]; uint32_t iy=y-VIEW_Y0; if (iy<VIEW_H && g_view_cache[iy][x]==v) continue; vga_putch_xy(x,y,(uint8_t)s[j],attr_num); if (iy<VIEW_H) g_view_cache[iy][x]=v; }
+            continue;
+        }
+        // identifier / keyword
+        if (is_shell_ident(c)) {
+            size_t st=i; while (i<len && is_shell_ident(s[i])) i++; size_t en=i;
+            uint8_t a = is_shell_kw(s, st, en) ? attr_kw : attr_norm;
+            for (size_t j=st;j<en && x<VIEW_W;j++,x++) { uint16_t v=((uint16_t)a<<8)|(uint8_t)s[j]; uint32_t iy=y-VIEW_Y0; if (iy<VIEW_H && g_view_cache[iy][x]==v) continue; vga_putch_xy(x,y,(uint8_t)s[j],a); if (iy<VIEW_H) g_view_cache[iy][x]=v; }
+            continue;
+        }
+        // default
+        { uint16_t v=((uint16_t)attr_norm<<8)|(uint8_t)s[i]; uint32_t iy=y-VIEW_Y0; if (iy<VIEW_H && g_view_cache[iy][x]==v) { x++; i++; } else { vga_putch_xy(x++,y,(uint8_t)s[i],attr_norm); if (iy<VIEW_H) g_view_cache[iy][x-1]=v; i++; } }
     }
 }
 

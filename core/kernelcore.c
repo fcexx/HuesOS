@@ -212,25 +212,40 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {
 
     kprintf("kernel base: done (idt, gdt, pic, pit, pci, rtc, paging, heap, keyboard)\n");
 
-    static const char license_text[] =
-"MIT License\n"
-"Copyright (c) 2025 The Axon Team\n\n"
-"Permission is hereby granted, free of charge, to any person obtaining a copy\n"
-"of this software and associated documentation files (the 'Software'), to deal\n"
-"in the Software without restriction, including without limitation the rights\n"
-"to use, copy, modify, merge, publish, distribute, sublicense, and/or sell\n"
-"copies of the Software, and to permit persons to whom the Software is\n"
-"furnished to do so, subject to the following conditions:\n\n"
-"The above copyright notice and this permission notice shall be included in all\n"
-"copies or substantial portions of the Software.\n\n"
-"THE SOFTWARE IS PROVIDED 'AS IS', WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\n"
-"IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\n"
-"FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\n"
-"AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\n"
-"LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\n"
-"OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\n"
-"SOFTWARE.\n";
-    struct fs_file *license_file = fs_create_file("/LICENSE");
+    static const char license_text[] = "#!osh\n"
+
+"echo \"\"\n"
+"echo \"== Double math ==\"\n"
+"a = 2 + 2 / (50 - 21) * 29\n"
+"b = 1.5 + 2.25\n"
+"pi = 3.14159265\n"
+"echo \"a = $a, b = $b, pi = $pi\"\n"
+
+"echo \"\"\n"
+"echo \"== if / else if / else ==\"\n"
+"if a == 2 { echo \"a == 2 (ok)\"}\n"
+"else { echo \"a != 2\" }\n"
+
+"echo \"\"\n"
+"echo \"== while loop ==\"\n"
+"counter = 0\n"
+"while counter < 3 {\n"
+"    echo \"counter = $counter\"\n"
+"    counter = $counter + 1\n"
+"}\n"
+
+"echo \"\"\n"
+"echo \"== functions with params ==\"\n"
+"foo(n1, n2) {\n"
+"    sum = $n1 + $n2\n"
+"    echo \"foo: $n1 + $n2 = $sum\"\n"
+"}\n"
+
+"foo(10, 32.5)\n"
+
+"echo \"\"\n"
+"echo \"== done ==\"\n";
+    struct fs_file *license_file = fs_create_file("/demo");
     if (license_file) {
         fs_write(license_file, license_text, strlen(license_text), 0);
         fs_file_free(license_file);

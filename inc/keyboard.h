@@ -33,6 +33,10 @@ int kgetc_available();
 // get string with support for arrows and editing
 char* kgets(char* buffer, int max_length);
 
+// ctrl+C handling helpers
+int keyboard_ctrlc_pending(void);
+int keyboard_consume_ctrlc(void);
+
 #ifdef __cplusplus
 }
 #endif

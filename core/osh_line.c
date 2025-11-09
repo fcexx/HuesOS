@@ -14,6 +14,7 @@
 static char g_hist[OSH_MAX_HISTORY][OSH_MAX_LINE];
 static int g_hist_count = 0;
 static int g_hist_pos = 0;
+static int g_last_ctrlc = 0;
 
 void osh_history_init(void) { g_hist_count = 0; g_hist_pos = 0; }
 
@@ -199,6 +200,7 @@ static void complete_token(const char* cwd, char* buf, int* io_len, int* io_cur,
 
 int osh_line_read(const char* prompt, const char* cwd, char* out, int out_size) {
     if (!out || out_size <= 1) return -1;
+    g_last_ctrlc = 0;
     char buf[OSH_MAX_LINE]; int len = 0, cur = 0;
     buf[0]='\0';
     uint32_t sx=0, sy=0; vga_get_cursor(&sx, &sy);
@@ -206,6 +208,12 @@ int osh_line_read(const char* prompt, const char* cwd, char* out, int out_size) 
     redraw_line_xy(sx, sy, prompt, buf, len, cur, sugg, sugg_len);
     for (;;) {
         char c = kgetc();
+        if (c == 3) {
+            keyboard_consume_ctrlc();
+            g_last_ctrlc = 1;
+            kprint((uint8_t*)"^C\n");
+            return -1;
+        }
         if (c == '\n' || c == '\r') {
             buf[len]='\0'; strncpy(out, buf, (size_t)out_size-1); out[out_size-1]='\0';
             kprint((uint8_t*)"\n");
@@ -234,6 +242,12 @@ int osh_line_read(const char* prompt, const char* cwd, char* out, int out_size) 
         }
         redraw_line_xy(sx, sy, prompt, buf, len, cur, sugg, sugg_len);
     }
+}
+
+int osh_line_was_ctrlc(void) {
+    int v = g_last_ctrlc;
+    g_last_ctrlc = 0;
+    return v;
 }
 
 

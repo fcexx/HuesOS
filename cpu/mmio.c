@@ -3,6 +3,11 @@
 #include <pci.h>
 #include <string.h>
 
+// ?????????? ??????????
+static uint32_t dns_cache_count = 0;
+static uint16_t dns_transaction_id = 0;
+static struct dns_cache_entry dns_cache[DNS_CACHE_SIZE];
+
 volatile uint32_t* e1000_mmio = 0;
 static uint8_t mac_address[6];
 static uint32_t ip_address = 0x0101A8C0;
@@ -24,46 +29,6 @@ static uint32_t arp_packets = 0;
 static uint32_t icmp_packets = 0;
 static uint32_t udp_packets = 0;
 static uint32_t dns_packets = 0;
-
-struct dns_header {
-    uint16_t id;
-    uint16_t flags;
-    uint16_t qdcount;
-    uint16_t ancount;
-    uint16_t nscount;
-    uint16_t arcount;
-} __attribute__((packed));
-
-struct dns_question {
-    uint16_t qtype;
-    uint16_t qclass;
-} __attribute__((packed));
-
-struct dns_answer {
-    uint16_t name;
-    uint16_t type;
-    uint16_t class;
-    uint32_t ttl;
-    uint16_t rdlength;
-    uint32_t rdata;
-} __attribute__((packed));
-
-struct udp_header {
-    uint16_t src_port;
-    uint16_t dst_port;
-    uint16_t length;
-    uint16_t checksum;
-} __attribute__((packed));
-
-#define DNS_CACHE_SIZE 10
-static struct dns_cache_entry {
-    char hostname[64];
-    uint32_t ip;
-    uint32_t timestamp;
-} dns_cache[DNS_CACHE_SIZE];
-
-static uint32_t dns_cache_count = 0;
-static uint16_t dns_transaction_id = 0;
 
 uint16_t htons(uint16_t hostshort) {
     return (hostshort << 8) | (hostshort >> 8);
@@ -670,7 +635,6 @@ void net_test_dns(void) {
         "google.com",
         "cloudflare.com", 
         "github.com",
-        "yougame.biz"
         "192.168.1.1",
         NULL
     };

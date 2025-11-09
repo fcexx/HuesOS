@@ -108,7 +108,7 @@ struct icmp_header {
     uint16_t checksum;
     uint16_t identifier;
     uint16_t sequence;
-    uint8_t data[];
+    uint8_t data[48]; // Fixed size array instead of flex array
 } __attribute__((packed));
 
 struct arp_header {
@@ -123,6 +123,13 @@ struct arp_header {
     uint32_t target_ip;
 } __attribute__((packed));
 
+// Additional E1000 register definitions
+#define E1000_TX_RING_SIZE 32
+#define E1000_RX_RING_SIZE 32
+
+// Additional control bits
+#define E1000_RCTL_SZ_2048_ALT (0 << 16) // Alternative definition
+
 // Driver functions
 void e1000_init(void);
 int e1000_send_packet(const uint8_t* data, uint16_t length);
@@ -136,14 +143,63 @@ void e1000_handle_interrupt(void);
 void net_ping(const char* ip_str);
 void net_send_arp(const char* ip_str);
 
+// DNS functions
+uint32_t dns_resolve(const char* hostname);
+void net_test_dns(void);
+
 // Byte order helpers
 uint16_t htons(uint16_t hostshort);
 uint32_t htonl(uint32_t hostlong);
 uint16_t ntohs(uint16_t netshort);
 uint32_t ntohl(uint32_t netlong);
 
+// Checksum calculation
+uint16_t calculate_checksum(const void* data, uint16_t length);
+
+// Utility functions
+uint32_t parse_ip(const char* ip_str);
+
 // Global variable
 extern volatile uint32_t* e1000_mmio;
 
-// DNS functions
-uint32_t dns_resolve(const char* hostname);
+// DNS structures
+struct dns_header {
+    uint16_t id;
+    uint16_t flags;
+    uint16_t qdcount;
+    uint16_t ancount;
+    uint16_t nscount;
+    uint16_t arcount;
+} __attribute__((packed));
+
+struct dns_question {
+    uint16_t qtype;
+    uint16_t qclass;
+} __attribute__((packed));
+
+struct dns_answer {
+    uint16_t name;
+    uint16_t type;
+    uint16_t class;
+    uint32_t ttl;
+    uint16_t rdlength;
+    uint32_t rdata;
+} __attribute__((packed));
+
+struct udp_header {
+    uint16_t src_port;
+    uint16_t dst_port;
+    uint16_t length;
+    uint16_t checksum;
+} __attribute__((packed));
+
+// DNS cache
+#define DNS_CACHE_SIZE 10
+struct dns_cache_entry {
+    char hostname[64];
+    uint32_t ip;
+    uint32_t timestamp;
+};
+
+// DNS name encoding
+int dns_encode_name(const char* name, uint8_t* buffer);

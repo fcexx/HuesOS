@@ -690,12 +690,10 @@ int net_send_to_server(const char* host, uint16_t port, const uint8_t* data, uin
         return 0;
     }
 
-    // Ethernet
     memcpy(eth->dst_mac, broadcast_mac, 6);
     memcpy(eth->src_mac, mac_address, 6);
     eth->ethertype = htons(ETHERTYPE_IP);
 
-    // IP
     iph->version_ihl = 0x45;
     iph->tos = 0;
     iph->total_length = htons(sizeof(struct ip_header) + sizeof(struct udp_header) + len);
@@ -708,13 +706,11 @@ int net_send_to_server(const char* host, uint16_t port, const uint8_t* data, uin
     iph->dst_ip = htonl(dest_ip);
     iph->checksum = calculate_checksum(iph, sizeof(struct ip_header));
 
-    // UDP
-    udp->src_port = htons(12345); // ephemeral source port
+    udp->src_port = htons(12345);
     udp->dst_port = htons(port);
     udp->length = htons(sizeof(struct udp_header) + len);
-    udp->checksum = 0; // not computing UDP checksum (simple)
+    udp->checksum = 0;
 
-    // payload
     memcpy(payload, data, len);
 
     uint16_t packet_length = headers_len + len;

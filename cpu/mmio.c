@@ -623,8 +623,6 @@ void e1000_print_stats(void) {
                (dns_print >> 24) & 0xFF, (dns_print >> 16) & 0xFF,
                (dns_print >> 8) & 0xFF, dns_print & 0xFF);
     }
-    kprintf("IP: 192.168.1.1\n");
-    kprintf("DNS: 8.8.8.8\n");
     kprintf("Link: %s\n", e1000_link_up() ? "UP" : "DOWN");
     kprintf("TX: %d packets, %d bytes, %d errors\n", tx_packets, tx_bytes, tx_errors);
     kprintf("RX: %d packets, %d bytes, %d errors\n", rx_packets, rx_bytes, rx_errors);

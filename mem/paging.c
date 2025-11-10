@@ -69,4 +69,29 @@ int unmap_page_2m(uint64_t va) {
     return 0;
 }
 
+uint64_t paging_virt_to_phys(uint64_t va) {
+    uint64_t* l4 = (uint64_t*)((uint64_t)page_table_l4);
+    uint64_t l4e = l4[(va >> 39) & 0x1FF];
+    if (!(l4e & PG_PRESENT)) return 0;
+    uint64_t* l3 = (uint64_t*)(l4e & ~0xFFFULL);
+    uint64_t l3e = l3[(va >> 30) & 0x1FF];
+    if (!(l3e & PG_PRESENT)) return 0;
+    if (l3e & PG_PS_1G) {
+        uint64_t phys = l3e & ~((1ULL << 30) - 1);
+        return phys | (va & ((1ULL << 30) - 1));
+    }
+    uint64_t* l2 = (uint64_t*)(l3e & ~0xFFFULL);
+    uint64_t l2e = l2[(va >> 21) & 0x1FF];
+    if (!(l2e & PG_PRESENT)) return 0;
+    if (l2e & PG_PS_2M) {
+        uint64_t phys = l2e & ~((1ULL << 21) - 1);
+        return phys | (va & ((1ULL << 21) - 1));
+    }
+    uint64_t* l1 = (uint64_t*)(l2e & ~0xFFFULL);
+    uint64_t l1e = l1[(va >> 12) & 0x1FF];
+    if (!(l1e & PG_PRESENT)) return 0;
+    uint64_t phys = l1e & ~0xFFFULL;
+    return phys | (va & 0xFFFULL);
+}
+
 

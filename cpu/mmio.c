@@ -2,21 +2,38 @@
 #include <axonos.h>
 #include <pci.h>
 #include <string.h>
+#include <stdio.h>
+#include <net/arp.h>
+#include <net/ip.h>
+#include <net/icmp.h>
+#include <net/udp.h>
+#include <net/tcp.h>
+#include <net/tls.h>
+#include <paging.h>
 
+static uint32_t default_subnet_mask_host(void);
+static uint32_t rx_cur_index = 0;
+static int g_e1000_link = 0;
+
+struct net_config g_net_config = {
+    .ip = 0,
+    .subnet_mask = 0,
+    .gateway = 0,
+    .dns = 0
+};
+
+// глобальные сетевые параметры
 static uint32_t dns_cache_count = 0;
 static uint16_t dns_transaction_id = 0;
 static struct dns_cache_entry dns_cache[DNS_CACHE_SIZE];
 
 volatile uint32_t* e1000_mmio = 0;
-static uint8_t mac_address[6];
-static uint32_t ip_address = 0x0101A8C0;
-static uint8_t broadcast_mac[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-static uint32_t dns_server = 0x08080808;
+uint8_t net_mac_address[6];
+uint32_t net_ip_address = 0;
+uint8_t net_broadcast_mac[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+uint32_t net_dns_server = 0;
 
-static struct e1000_tx_desc tx_ring[E1000_TX_RING_SIZE] __attribute__((aligned(16)));
-static struct e1000_rx_desc rx_ring[E1000_RX_RING_SIZE] __attribute__((aligned(16)));
-static uint8_t tx_buffers[E1000_TX_RING_SIZE][E1000_TX_BUFFER_SIZE];
-static uint8_t rx_buffers[E1000_RX_RING_SIZE][E1000_RX_BUFFER_SIZE];
+static uint8_t dns_query_payload[256];
 
 static uint32_t tx_packets = 0;
 static uint32_t rx_packets = 0;
@@ -24,10 +41,34 @@ static uint32_t tx_bytes = 0;
 static uint32_t rx_bytes = 0;
 static uint32_t tx_errors = 0;
 static uint32_t rx_errors = 0;
-static uint32_t arp_packets = 0;
-static uint32_t icmp_packets = 0;
-static uint32_t udp_packets = 0;
-static uint32_t dns_packets = 0;
+
+static struct e1000_tx_desc* tx_ring = NULL;
+static struct e1000_rx_desc* rx_ring = NULL;
+static uint8_t* tx_buffers = NULL;
+static uint8_t* rx_buffers = NULL;
+static uint64_t tx_ring_phys = 0;
+static uint64_t rx_ring_phys = 0;
+static uint64_t tx_buffers_phys = 0;
+static uint64_t rx_buffers_phys = 0;
+
+#define DMA_POOL_SIZE (512 * 1024)
+static uint8_t dma_pool[DMA_POOL_SIZE] __attribute__((aligned(4096)));
+static size_t dma_pool_offset = 0;
+
+static void* dma_alloc(size_t size, size_t align, uint64_t* phys_out) {
+    size_t aligned = (dma_pool_offset + (align - 1)) & ~(align - 1);
+    if (aligned + size > DMA_POOL_SIZE) {
+        if (phys_out) *phys_out = 0;
+        return NULL;
+    }
+    void* virt = dma_pool + aligned;
+    dma_pool_offset = aligned + size;
+    if (phys_out) {
+        *phys_out = paging_virt_to_phys((uint64_t)(uintptr_t)virt);
+    }
+    memset(virt, 0, size);
+    return virt;
+}
 
 uint16_t htons(uint16_t hostshort) {
     return (hostshort << 8) | (hostshort >> 8);
@@ -94,7 +135,8 @@ uint32_t parse_ip(const char* ip_str) {
     }
     
     if (part_count == 4) {
-        ip = (parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3];
+        uint32_t net = (parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3];
+        ip = ntohl(net);
     }
     
     return ip;
@@ -124,9 +166,28 @@ int dns_encode_name(const char* name, uint8_t* buffer) {
     return pos;
 }
 
+static const uint8_t* dns_skip_name(const uint8_t* base, const uint8_t* ptr, const uint8_t* end) {
+    (void)base;
+    const uint8_t* p = ptr;
+    while (p < end) {
+        uint8_t len = *p;
+        if (len == 0) {
+            return p + 1;
+        }
+        if ((len & 0xC0) == 0xC0) {
+            if (p + 1 >= end) return NULL;
+            return p + 2;
+        }
+        p++;
+        if (p + len > end) return NULL;
+        p += len;
+    }
+    return NULL;
+}
+
 uint32_t dns_resolve(const char* hostname) {
     if (!e1000_mmio) {
-        kprintf("<(0f)>E1000 not initialized<(07)>\n");
+        kprintf("E1000 not initialized\n");
         return 0;
     }
     
@@ -138,71 +199,16 @@ uint32_t dns_resolve(const char* hostname) {
     
     uint32_t ip = parse_ip(hostname);
     if (ip != 0) {
+        kprintf("DNS skip (literal) %s -> %d.%d.%d.%d\n", hostname,
+               (htonl(ip) >> 24) & 0xFF, (htonl(ip) >> 16) & 0xFF,
+               (htonl(ip) >> 8) & 0xFF, htonl(ip) & 0xFF);
         return ip;
     }
     
-    kprintf("<(0f)>Resolving %s via DNS...<(07)>\n", hostname);
+    kprintf("Resolving %s via DNS...\n", hostname);
     
-    static uint8_t packet[512];
-    struct eth_header* eth = (struct eth_header*)packet;
-    struct ip_header* iph = (struct ip_header*)(packet + sizeof(struct eth_header));
-    struct udp_header* udp = (struct udp_header*)(packet + sizeof(struct eth_header) + sizeof(struct ip_header));
-    struct dns_header* dns = (struct dns_header*)(packet + sizeof(struct eth_header) + sizeof(struct ip_header) + sizeof(struct udp_header));
-    
-    memcpy(eth->dst_mac, broadcast_mac, 6);
-    memcpy(eth->src_mac, mac_address, 6);
-    eth->ethertype = htons(ETHERTYPE_ARP);
-    
-    static uint8_t arp_packet[64];
-    struct eth_header* arp_eth = (struct eth_header*)arp_packet;
-    struct arp_header* arp = (struct arp_header*)(arp_packet + sizeof(struct eth_header));
-    
-    memcpy(arp_eth->dst_mac, broadcast_mac, 6);
-    memcpy(arp_eth->src_mac, mac_address, 6);
-    arp_eth->ethertype = htons(ETHERTYPE_ARP);
-    
-    arp->hw_type = htons(1);
-    arp->proto_type = htons(ETHERTYPE_IP);
-    arp->hw_size = 6;
-    arp->proto_size = 4;
-    arp->opcode = htons(1);
-    memcpy(arp->sender_mac, mac_address, 6);
-    arp->sender_ip = htonl(ip_address);
-    memset(arp->target_mac, 0, 6);
-    arp->target_ip = htonl(dns_server);
-    
-    if (!e1000_send_packet(arp_packet, sizeof(struct eth_header) + sizeof(struct arp_header))) {
-        kprintf("<(0f)>Failed to send ARP for DNS server<(07)>\n");
-        return 0;
-    }
-    
-    for (int i = 0; i < 1000000; i++) {
-        asm volatile("pause");
-    }
-    
-    memset(packet, 0, sizeof(packet));
-    
-    memcpy(eth->dst_mac, broadcast_mac, 6);
-    memcpy(eth->src_mac, mac_address, 6);
-    eth->ethertype = htons(ETHERTYPE_IP);
-    
-    iph->version_ihl = 0x45;
-    iph->tos = 0;
-    iph->total_length = htons(sizeof(struct ip_header) + sizeof(struct udp_header) + sizeof(struct dns_header) + 64);
-    iph->identification = htons(0x1234);
-    iph->flags_fragment = 0;
-    iph->ttl = 64;
-    iph->protocol = IP_PROTOCOL_UDP;
-    iph->checksum = 0;
-    iph->src_ip = htonl(ip_address);
-    iph->dst_ip = htonl(dns_server);
-    iph->checksum = calculate_checksum(iph, sizeof(struct ip_header));
-    
-    udp->src_port = htons(12345);
-    udp->dst_port = htons(53);
-    udp->length = htons(sizeof(struct udp_header) + sizeof(struct dns_header) + 64);
-    udp->checksum = 0;
-    
+    memset(dns_query_payload, 0, sizeof(dns_query_payload));
+    struct dns_header* dns = (struct dns_header*)dns_query_payload;
     dns->id = htons(++dns_transaction_id);
     dns->flags = htons(0x0100);
     dns->qdcount = htons(1);
@@ -210,50 +216,119 @@ uint32_t dns_resolve(const char* hostname) {
     dns->nscount = 0;
     dns->arcount = 0;
     
-    uint8_t* question = (uint8_t*)(dns + 1);
+    uint8_t* question = dns_query_payload + sizeof(struct dns_header);
     int name_len = dns_encode_name(hostname, question);
-    
     struct dns_question* dns_q = (struct dns_question*)(question + name_len);
     dns_q->qtype = htons(1);
     dns_q->qclass = htons(1);
     
-    uint16_t dns_length = sizeof(struct dns_header) + name_len + sizeof(struct dns_question);
-    udp->length = htons(sizeof(struct udp_header) + dns_length);
-    
-    uint16_t packet_length = sizeof(struct eth_header) + sizeof(struct ip_header) + sizeof(struct udp_header) + dns_length;
-    
-    if (e1000_send_packet(packet, packet_length)) {
-        kprintf("<(0f)>DNS query sent for %s<(07)>\n", hostname);
-        dns_packets++;
+    uint16_t dns_length = (uint16_t)(sizeof(struct dns_header) + name_len + sizeof(struct dns_question));
+    if (!udp_send(net_dns_server, UDP_DEFAULT_LOCAL_PORT, 53, dns_query_payload, dns_length)) {
+        kprintf("Failed to send DNS query\n");
     } else {
-        kprintf("<(0f)>Failed to send DNS query<(07)>\n");
-        return 0;
+        uint8_t response[512];
+        int received = udp_wait(UDP_DEFAULT_LOCAL_PORT, net_dns_server, 53,
+                                 response, sizeof(response), UDP_WAIT_DEFAULT_ATTEMPTS);
+        if (received >= (int)sizeof(struct dns_header)) {
+            struct dns_header* resp = (struct dns_header*)response;
+            if (resp->id == dns->id) {
+                const uint8_t* ptr = response + sizeof(struct dns_header);
+                const uint8_t* end = response + received;
+                uint16_t qdcount = ntohs(resp->qdcount);
+                uint16_t ancount = ntohs(resp->ancount);
+
+                for (uint16_t qi = 0; qi < qdcount; qi++) {
+                    ptr = dns_skip_name(response, ptr, end);
+                    if (!ptr || ptr + 4 > end) {
+                        ptr = NULL;
+                        break;
+                    }
+                    ptr += 4;
+                }
+
+                if (ptr) {
+                    for (uint16_t ai = 0; ai < ancount; ai++) {
+                        const uint8_t* name_end = dns_skip_name(response, ptr, end);
+                        if (!name_end || name_end + 10 > end) {
+                            ptr = NULL;
+                            break;
+                        }
+
+                        uint16_t type = ntohs(*(const uint16_t*)(name_end + 0));
+                        uint16_t cls = ntohs(*(const uint16_t*)(name_end + 2));
+                        uint32_t ttl = ntohl(*(const uint32_t*)(name_end + 4));
+                        uint16_t rdlength = ntohs(*(const uint16_t*)(name_end + 8));
+                        const uint8_t* rdata = name_end + 10;
+
+                        if (rdata + rdlength > end) {
+                            ptr = NULL;
+                            break;
+                        }
+
+                        if (type == 1 && cls == 1 && rdlength == 4) {
+                            uint32_t resolved_ip = ntohl(*(const uint32_t*)rdata);
+                            kprintf("DNS resolved host-order %s -> %d.%d.%d.%d\n", hostname,
+                                   (htonl(resolved_ip) >> 24) & 0xFF, (htonl(resolved_ip) >> 16) & 0xFF,
+                                   (htonl(resolved_ip) >> 8) & 0xFF, htonl(resolved_ip) & 0xFF);
+                            if (dns_cache_count < DNS_CACHE_SIZE) {
+                                struct dns_cache_entry* entry = &dns_cache[dns_cache_count++];
+                                strncpy(entry->hostname, hostname, sizeof(entry->hostname) - 1);
+                                entry->hostname[sizeof(entry->hostname) - 1] = '\0';
+                                entry->ip = resolved_ip;
+                                entry->timestamp = ttl;
+                            }
+
+                            uint32_t print_ip = htonl(resolved_ip);
+                            kprintf("Resolved %s -> %d.%d.%d.%d\n", hostname,
+                                   (print_ip >> 24) & 0xFF, (print_ip >> 16) & 0xFF,
+                                   (print_ip >> 8) & 0xFF, print_ip & 0xFF);
+                            return resolved_ip;
+                        }
+
+                        ptr = rdata + rdlength;
+                    }
+                }
+            }
+        }
     }
     
-    if (strcmp(hostname, "google.com") == 0) return 0x4A7D461F;
-    if (strcmp(hostname, "cloudflare.com") == 0) return 0x01010101;
-    if (strcmp(hostname, "github.com") == 0) return 0xC01F0F0F;
+    if (strcmp(hostname, "google.com") == 0) return ntohl(0x4A7D461F);
+    if (strcmp(hostname, "cloudflare.com") == 0) return ntohl(0x01010101);
+    if (strcmp(hostname, "github.com") == 0) return ntohl(0xC01F0F0F);
     
-    kprintf("<(0f)>DNS resolution failed for: %s<(07)>\n", hostname);
+    kprintf("DNS resolution failed for: %s\n", hostname);
     return 0;
+}
+
+static void apply_net_config_defaults(void) {
+    net_ip_address = g_net_config.ip;
+    net_dns_server = g_net_config.dns ? g_net_config.dns : parse_ip("10.0.2.3");
 }
 
 static void e1000_init_tx(void) {
     e1000_write(E1000_TCTL, 0);
     
-    uint64_t tx_phys = (uint64_t)&tx_ring;
+    uint64_t tx_phys = tx_ring_phys ? tx_ring_phys : paging_virt_to_phys((uint64_t)(uintptr_t)tx_ring);
+    if (!tx_phys) {
+        kprintf("Failed to translate tx_ring to physical address\n");
+        return;
+    }
     e1000_write(E1000_TDBAL, (uint32_t)(tx_phys & 0xFFFFFFFF));
     e1000_write(E1000_TDBAH, (uint32_t)(tx_phys >> 32));
     e1000_write(E1000_TDLEN, E1000_TX_RING_SIZE * sizeof(struct e1000_tx_desc));
     
     for (int i = 0; i < E1000_TX_RING_SIZE; i++) {
-        tx_ring[i].buffer_addr = (uint64_t)&tx_buffers[i];
+        uint8_t* buf = tx_buffers + (size_t)i * E1000_TX_BUFFER_SIZE;
+        uint64_t buf_phys = tx_buffers_phys ? (tx_buffers_phys + (uint64_t)i * E1000_TX_BUFFER_SIZE)
+                                            : paging_virt_to_phys((uint64_t)(uintptr_t)buf);
+        tx_ring[i].buffer_addr = buf_phys;
         tx_ring[i].length = 0;
         tx_ring[i].cso = 0;
         tx_ring[i].cmd = 0;
         tx_ring[i].status = E1000_TXD_STAT_DD;
         tx_ring[i].css = 0;
         tx_ring[i].special = 0;
+        memset(buf, 0, E1000_TX_BUFFER_SIZE);
     }
     
     e1000_write(E1000_TDH, 0);
@@ -263,37 +338,47 @@ static void e1000_init_tx(void) {
     
     e1000_write(E1000_TIPG, 0x0060200A);
     
-    kprintf("<(0f)>TX ring: %d descriptors<(07)>\n", E1000_TX_RING_SIZE);
+    kprintf("TX ring: %d descriptors\n", E1000_TX_RING_SIZE);
 }
 
 static void e1000_init_rx(void) {
     e1000_write(E1000_RCTL, 0);
     
-    uint64_t rx_phys = (uint64_t)&rx_ring;
+    uint64_t rx_phys = rx_ring_phys ? rx_ring_phys : paging_virt_to_phys((uint64_t)(uintptr_t)rx_ring);
+    if (!rx_phys) {
+        kprintf("Failed to translate rx_ring to physical address\n");
+        return;
+    }
     e1000_write(E1000_RDBAL, (uint32_t)(rx_phys & 0xFFFFFFFF));
     e1000_write(E1000_RDBAH, (uint32_t)(rx_phys >> 32));
     e1000_write(E1000_RDLEN, E1000_RX_RING_SIZE * sizeof(struct e1000_rx_desc));
     
     for (int i = 0; i < E1000_RX_RING_SIZE; i++) {
-        rx_ring[i].buffer_addr = (uint64_t)&rx_buffers[i];
+        uint8_t* buf = rx_buffers + (size_t)i * E1000_RX_BUFFER_SIZE;
+        uint64_t buf_phys = rx_buffers_phys ? (rx_buffers_phys + (uint64_t)i * E1000_RX_BUFFER_SIZE)
+                                            : paging_virt_to_phys((uint64_t)(uintptr_t)buf);
+        rx_ring[i].buffer_addr = buf_phys;
         rx_ring[i].length = 0;
         rx_ring[i].checksum = 0;
         rx_ring[i].status = 0;
         rx_ring[i].errors = 0;
         rx_ring[i].special = 0;
+        memset(buf, 0, E1000_RX_BUFFER_SIZE);
     }
     
     e1000_write(E1000_RDH, 0);
     e1000_write(E1000_RDT, E1000_RX_RING_SIZE - 1);
+    rx_cur_index = 0;
     
-    uint32_t rctl = E1000_RCTL_EN | E1000_RCTL_BAM | E1000_RCTL_SECRC | E1000_RCTL_LPE | E1000_RCTL_SZ_2048;
+    uint32_t rctl = E1000_RCTL_EN | E1000_RCTL_BAM | E1000_RCTL_SECRC | E1000_RCTL_LPE |
+                     E1000_RCTL_UPE | E1000_RCTL_MPE | E1000_RCTL_SZ_2048;
     e1000_write(E1000_RCTL, rctl);
     
-    kprintf("<(0f)>RX ring: %d descriptors<(07)>\n", E1000_RX_RING_SIZE);
+    kprintf("RX ring: %d descriptors\n", E1000_RX_RING_SIZE);
 }
 
 static void e1000_reset(void) {
-    kprintf("<(0f)>Resetting E1000...<(07)>\n");
+    kprintf("Resetting E1000...\n");
     
     e1000_write(E1000_CTRL, e1000_read(E1000_CTRL) | E1000_CTRL_RST);
     
@@ -303,16 +388,92 @@ static void e1000_reset(void) {
             uint32_t ctrl = e1000_read(E1000_CTRL);
             ctrl |= E1000_CTRL_SLU;
             e1000_write(E1000_CTRL, ctrl);
-            kprintf("<(0f)>Reset complete<(07)>\n");
+            kprintf("Reset complete\n");
             return;
         }
     }
     
-    kprintf("<(0f)>Reset timeout<(07)>\n");
+    kprintf("Reset timeout\n");
+}
+
+static void e1000_configure_tx(void) {
+    uint32_t tctl = E1000_TCTL_EN | E1000_TCTL_PSP | (0x10 << E1000_TCTL_CT_SHIFT) | (0x40 << E1000_TCTL_COLD_SHIFT);
+    e1000_write(E1000_TCTL, tctl);
+    e1000_write(E1000_TIPG, 0x0060200A);
+}
+
+static void e1000_configure_rx(void) {
+    uint32_t rctl = E1000_RCTL_BAM | E1000_RCTL_SECRC | E1000_RCTL_LBM_NO |
+                    E1000_RCTL_SBP | E1000_RCTL_UPE | E1000_RCTL_MPE | E1000_RCTL_DPF;
+    rctl |= (0 << E1000_RCTL_BSIZE_SHIFT);
+    rctl &= ~E1000_RCTL_BSEX;
+    e1000_write(E1000_RCTL, rctl);
+
+    e1000_write(E1000_RDTR, 0);
+    e1000_write(E1000_RADV, 0);
+
+    uint32_t rxdctl = (1 << E1000_RXDCTL_PTHRESH_SHIFT) |
+                      (1 << E1000_RXDCTL_HTHRESH_SHIFT) |
+                      (1 << E1000_RXDCTL_WTHRESH_SHIFT) |
+                      E1000_RXDCTL_QUEUE_ENABLE;
+    e1000_write(E1000_RXDCTL, rxdctl);
+    int guard = 100000;
+    while (!(e1000_read(E1000_RXDCTL) & E1000_RXDCTL_QUEUE_ENABLE) && guard-- > 0) {
+        asm volatile("pause");
+    }
+
+    e1000_write(E1000_RDH, 0);
+    e1000_write(E1000_RDT, E1000_RX_RING_SIZE - 1);
+
+    rctl |= E1000_RCTL_EN;
+    e1000_write(E1000_RCTL, rctl);
+}
+
+static void e1000_configure_flow_control(void) {
+    e1000_write(E1000_FCAL, 0x00C28001);
+    e1000_write(E1000_FCAH, 0x00000100);
+    e1000_write(E1000_FCTTV, 0x00000600);
+    e1000_write(E1000_FCRTL, 0x00004000);
+    e1000_write(E1000_FCRTH, 0x00004080);
+}
+
+static void e1000_clear_mta(void) {
+    for (int i = 0; i < 128; i++) {
+        e1000_write(E1000_MTA + i * 4, 0);
+    }
+}
+
+static void e1000_prepare_descriptors(void) {
+    if (!tx_ring || !rx_ring || !tx_buffers || !rx_buffers) return;
+    for (int i = 0; i < E1000_TX_RING_SIZE; i++) {
+        uint8_t* buf = tx_buffers + (size_t)i * E1000_TX_BUFFER_SIZE;
+        uint64_t buf_phys = tx_buffers_phys ? (tx_buffers_phys + (uint64_t)i * E1000_TX_BUFFER_SIZE)
+                                            : paging_virt_to_phys((uint64_t)(uintptr_t)buf);
+        tx_ring[i].buffer_addr = buf_phys;
+        tx_ring[i].length = 0;
+        tx_ring[i].cso = 0;
+        tx_ring[i].cmd = 0;
+        tx_ring[i].status = E1000_TXD_STAT_DD;
+        tx_ring[i].css = 0;
+        tx_ring[i].special = 0;
+        memset(buf, 0, E1000_TX_BUFFER_SIZE);
+    }
+    for (int i = 0; i < E1000_RX_RING_SIZE; i++) {
+        uint8_t* buf = rx_buffers + (size_t)i * E1000_RX_BUFFER_SIZE;
+        uint64_t buf_phys = rx_buffers_phys ? (rx_buffers_phys + (uint64_t)i * E1000_RX_BUFFER_SIZE)
+                                            : paging_virt_to_phys((uint64_t)(uintptr_t)buf);
+        rx_ring[i].buffer_addr = buf_phys;
+        rx_ring[i].length = 0;
+        rx_ring[i].checksum = 0;
+        rx_ring[i].status = 0;
+        rx_ring[i].errors = 0;
+        rx_ring[i].special = 0;
+        memset(buf, 0, E1000_RX_BUFFER_SIZE);
+    }
 }
 
 void e1000_init(void) {
-    kprintf("<(0f)>Initializing E1000 network driver...<(07)>\n");
+    kprintf("Initializing E1000 network driver...\n");
     
     int device_count = pci_get_device_count();
     pci_device_t* devices = pci_get_devices();
@@ -321,7 +482,7 @@ void e1000_init(void) {
         pci_device_t* dev = &devices[i];
         
         if (dev->vendor_id == 0x8086 && (dev->device_id == 0x100E || dev->device_id == 0x100F)) {
-            kprintf("<(0f)>Found E1000 at %d:%d:%d<(07)>\n", dev->bus, dev->device, dev->function);
+            kprintf("Found E1000 at %d:%d:%d\n", dev->bus, dev->device, dev->function);
             
             uint32_t bar0 = pci_config_read_dword(dev->bus, dev->device, dev->function, 0x10);
             if ((bar0 & 1) == 0) {
@@ -331,31 +492,100 @@ void e1000_init(void) {
                 cmd |= (1 << 2) | (1 << 1);
                 pci_config_write_dword(dev->bus, dev->device, dev->function, 0x04, cmd);
                 
-                kprintf("<(0f)>MMIO base: 0x%08x<(07)>\n", (uint32_t)e1000_mmio);
+                kprintf("MMIO base: 0x%08x\n", (uint32_t)e1000_mmio);
                 
                 e1000_reset();
                 
                 uint32_t ral = e1000_read(E1000_RAL);
                 uint32_t rah = e1000_read(E1000_RAH);
-                mac_address[0] = (ral >> 0) & 0xFF;
-                mac_address[1] = (ral >> 8) & 0xFF;
-                mac_address[2] = (ral >> 16) & 0xFF;
-                mac_address[3] = (ral >> 24) & 0xFF;
-                mac_address[4] = (rah >> 0) & 0xFF;
-                mac_address[5] = (rah >> 8) & 0xFF;
+                net_mac_address[0] = (ral >> 0) & 0xFF;
+                net_mac_address[1] = (ral >> 8) & 0xFF;
+                net_mac_address[2] = (ral >> 16) & 0xFF;
+                net_mac_address[3] = (ral >> 24) & 0xFF;
+                net_mac_address[4] = (rah >> 0) & 0xFF;
+                net_mac_address[5] = (rah >> 8) & 0xFF;
+
+                e1000_write(E1000_RAL, ral);
+                e1000_write(E1000_RAH, (rah & 0xFFFF) | E1000_RAH_AV);
+                
+                uint32_t mdicfg = e1000_read(E1000_MDICNFG);
+                mdicfg |= E1000_MDICNFG_FS | E1000_MDICNFG_FP;
+                e1000_write(E1000_MDICNFG, mdicfg);
+
+                if (!tx_ring) {
+                    tx_ring = (struct e1000_tx_desc*)dma_alloc(sizeof(struct e1000_tx_desc) * E1000_TX_RING_SIZE, 16, &tx_ring_phys);
+                    if (!tx_ring || !tx_ring_phys) {
+                        kprintf("Failed to allocate TX ring DMA memory\n");
+                        return;
+                    }
+                }
+                if (!rx_ring) {
+                    rx_ring = (struct e1000_rx_desc*)dma_alloc(sizeof(struct e1000_rx_desc) * E1000_RX_RING_SIZE, 16, &rx_ring_phys);
+                    if (!rx_ring || !rx_ring_phys) {
+                        kprintf("Failed to allocate RX ring DMA memory\n");
+                        return;
+                    }
+                }
+                if (!tx_buffers) {
+                    tx_buffers = (uint8_t*)dma_alloc(E1000_TX_RING_SIZE * E1000_TX_BUFFER_SIZE, 16, &tx_buffers_phys);
+                    if (!tx_buffers || !tx_buffers_phys) {
+                        kprintf("Failed to allocate TX buffers DMA memory\n");
+                        return;
+                    }
+                }
+                if (!rx_buffers) {
+                    rx_buffers = (uint8_t*)dma_alloc(E1000_RX_RING_SIZE * E1000_RX_BUFFER_SIZE, 16, &rx_buffers_phys);
+                    if (!rx_buffers || !rx_buffers_phys) {
+                        kprintf("Failed to allocate RX buffers DMA memory\n");
+                        return;
+                    }
+                }
+ 
+                qemu_debug_printf("TX ring virt=%p phys=0x%llx RX ring virt=%p phys=0x%llx RX buf virt=%p phys=0x%llx\n",
+                                   tx_ring, (unsigned long long)tx_ring_phys,
+                                   rx_ring, (unsigned long long)rx_ring_phys,
+                                   rx_buffers, (unsigned long long)rx_buffers_phys);
+                kprintf("TX ring virt=%p phys=0x%llx RX ring virt=%p phys=0x%llx RX buf virt=%p phys=0x%llx\n",
+                        tx_ring, (unsigned long long)tx_ring_phys,
+                        rx_ring, (unsigned long long)rx_ring_phys,
+                        rx_buffers, (unsigned long long)rx_buffers_phys);
                 
                 e1000_init_tx();
                 e1000_init_rx();
+                e1000_prepare_descriptors();
+                e1000_configure_flow_control();
+                e1000_clear_mta();
+                e1000_configure_tx();
+                e1000_configure_rx();
+ 
+                arp_init();
+                ip_init();
+                udp_init();
+                tcp_init();
+                icmp_init();
+                if (g_net_config.ip == 0) {
+                    g_net_config.ip = parse_ip("10.0.2.15");
+                    g_net_config.subnet_mask = parse_ip("255.255.255.0");
+                    g_net_config.gateway = parse_ip("10.0.2.2");
+                    g_net_config.dns = parse_ip("10.0.2.3");
+                }
+                apply_net_config_defaults();
+                tls_init();
                 
-                kprintf("<(0f)>E1000 ready - MAC: %02x:%02x:%02x:%02x:%02x:%02x<(07)>\n",
-                       mac_address[0], mac_address[1], mac_address[2],
-                       mac_address[3], mac_address[4], mac_address[5]);
+                kprintf("E1000 ready - MAC: %02x:%02x:%02x:%02x:%02x:%02x\n",
+                       net_mac_address[0], net_mac_address[1], net_mac_address[2],
+                       net_mac_address[3], net_mac_address[4], net_mac_address[5]);
+
+                g_e1000_link = e1000_link_up();
+                arp_request(g_net_config.gateway ? g_net_config.gateway : g_net_config.ip);
+
                 return;
             }
         }
     }
     
-    kprintf("<(0f)>E1000 not found<(07)>\n");
+    qemu_debug_printf("E1000 not found or MMIO BAR invalid\n");
+    kprintf("E1000 not found\n");
 }
 
 int e1000_send_packet(const uint8_t* data, uint16_t length) {
@@ -374,9 +604,8 @@ int e1000_send_packet(const uint8_t* data, uint16_t length) {
     
     struct e1000_tx_desc* desc = &tx_ring[tx_tail];
     
-    int timeout = 100000;
+    int timeout = 10;
     while (!(desc->status & E1000_TXD_STAT_DD) && timeout-- > 0) {
-        asm volatile("pause");
     }
     
     if (timeout <= 0) {
@@ -384,7 +613,8 @@ int e1000_send_packet(const uint8_t* data, uint16_t length) {
         return 0;
     }
     
-    memcpy((void*)desc->buffer_addr, data, length);
+    uint8_t* tx_buf = tx_buffers + (size_t)tx_tail * E1000_TX_BUFFER_SIZE;
+    memcpy(tx_buf, data, length);
     
     desc->length = length;
     desc->cso = 0;
@@ -402,86 +632,47 @@ int e1000_send_packet(const uint8_t* data, uint16_t length) {
 int e1000_receive_packet(uint8_t* buffer, uint16_t* length) {
     if (!e1000_mmio) return 0;
     
-    uint32_t rx_head = (e1000_read(E1000_RDH) + 1) % E1000_RX_RING_SIZE;
-    
-    if (rx_head == e1000_read(E1000_RDT)) {
+    struct e1000_rx_desc* desc = &rx_ring[rx_cur_index];
+
+    if (!(desc->status & E1000_RXD_STAT_DD)) {
+        static uint32_t idle_spins = 0;
+        idle_spins++;
+        if ((idle_spins & 0xFFFF) == 0) {
+            uint32_t hw_head = e1000_read(E1000_RDH);
+            uint32_t hw_tail = e1000_read(E1000_RDT);
+            kprintf("RX idle idx=%u hw_head=%u hw_tail=%u status=%02x\n",
+                   rx_cur_index, hw_head, hw_tail, desc->status);
+        }
         return 0;
     }
     
-    struct e1000_rx_desc* desc = &rx_ring[rx_head];
+    uint32_t hw_head = e1000_read(E1000_RDH);
+    uint32_t hw_tail = e1000_read(E1000_RDT);
+    kprintf("RX got idx=%u hw_head=%u hw_tail=%u len=%u\n",
+           rx_cur_index, hw_head, hw_tail, desc->length);
     
-    if (desc->status & E1000_RXD_STAT_DD) {
         *length = desc->length;
         if (*length > E1000_RX_BUFFER_SIZE) {
             *length = E1000_RX_BUFFER_SIZE;
             rx_errors++;
         }
         
-        memcpy(buffer, (void*)desc->buffer_addr, *length);
+    uint8_t* rx_buf = rx_buffers + (size_t)rx_cur_index * E1000_RX_BUFFER_SIZE;
+    memcpy(buffer, rx_buf, *length);
         
         desc->status = 0;
         
-        e1000_write(E1000_RDT, rx_head);
+    uint32_t completed = rx_cur_index;
+    rx_cur_index = (rx_cur_index + 1) % E1000_RX_RING_SIZE;
+    e1000_write(E1000_RDT, completed);
         
         rx_packets++;
         rx_bytes += *length;
         return 1;
-    }
-    
-    return 0;
 }
 
 void e1000_poll(void) {
-    uint8_t buffer[2048];
-    uint16_t length;
-    
-    while (e1000_receive_packet(buffer, &length)) {
-        if (length >= sizeof(struct eth_header)) {
-            struct eth_header* eth = (struct eth_header*)buffer;
-            
-            int is_for_us = 1;
-            for (int i = 0; i < 6; i++) {
-                if (eth->dst_mac[i] != mac_address[i] && eth->dst_mac[i] != 0xFF) {
-                    is_for_us = 0;
-                    break;
-                }
-            }
-            
-            if (is_for_us) {
-                uint16_t ethertype = ntohs(eth->ethertype);
-                
-                switch (ethertype) {
-                    case ETHERTYPE_ARP:
-                        arp_packets++;
-                        kprintf("<(0f)>[ARP] Packet received: %d bytes<(07)>\n", length);
-                        break;
-                    case ETHERTYPE_IP:
-                        if (length >= sizeof(struct eth_header) + sizeof(struct ip_header)) {
-                            struct ip_header* iph = (struct ip_header*)(buffer + sizeof(struct eth_header));
-                            
-                            if (iph->protocol == IP_PROTOCOL_ICMP) {
-                                icmp_packets++;
-                                kprintf("<(0f)>[ICMP] Reply from %d.%d.%d.%d<(07)>\n",
-                                       (ntohl(iph->src_ip) >> 24) & 0xFF,
-                                       (ntohl(iph->src_ip) >> 16) & 0xFF,
-                                       (ntohl(iph->src_ip) >> 8) & 0xFF,
-                                       ntohl(iph->src_ip) & 0xFF);
-                            }
-                            else if (iph->protocol == IP_PROTOCOL_UDP) {
-                                udp_packets++;
-                                struct udp_header* udp = (struct udp_header*)(buffer + sizeof(struct eth_header) + sizeof(struct ip_header));
-                                
-                                if (ntohs(udp->dst_port) == 53) {
-                                    dns_packets++;
-                                    kprintf("<(0f)>[DNS] Response received<(07)>\n");
-                                }
-                            }
-                        }
-                        break;
-                }
-            }
-        }
-    }
+    while (ip_poll_once()) {}
 }
 
 void e1000_handle_interrupt(void) {
@@ -490,7 +681,11 @@ void e1000_handle_interrupt(void) {
     uint32_t icr = e1000_read(E1000_ICR);
     
     if (icr & E1000_ICR_LSC) {
-        kprintf("<(0f)>Link status changed<(07)>\n");
+        g_e1000_link = e1000_link_up();
+        kprintf("Link status changed: %s\n", g_e1000_link ? "UP" : "DOWN");
+        if (g_e1000_link) {
+            arp_request(g_net_config.gateway ? g_net_config.gateway : g_net_config.ip);
+        }
     }
     
     e1000_poll();
@@ -503,141 +698,117 @@ int e1000_link_up(void) {
 
 void net_send_arp(const char* ip_str) {
     if (!e1000_mmio) {
-        kprintf("<(0f)>E1000 not initialized<(07)>\n");
+        kprintf("E1000 not initialized\n");
         return;
     }
     
-    uint32_t target_ip = parse_ip(ip_str);
-    if (target_ip == 0) {
-        target_ip = dns_resolve(ip_str);
-        if (target_ip == 0) {
-            kprintf("<(0f)>Invalid IP/hostname: %s<(07)>\n", ip_str);
+    uint32_t target_host = parse_ip(ip_str);
+    if (target_host == 0) {
+        target_host = dns_resolve(ip_str);
+        if (target_host == 0) {
+            kprintf("Invalid IP/hostname: %s\n", ip_str);
             return;
         }
     }
     
-    uint8_t packet[64] = {0};
-    struct eth_header* eth = (struct eth_header*)packet;
-    struct arp_header* arp = (struct arp_header*)(packet + sizeof(struct eth_header));
-    
-    memcpy(eth->dst_mac, broadcast_mac, 6);
-    memcpy(eth->src_mac, mac_address, 6);
-    eth->ethertype = htons(ETHERTYPE_ARP);
-    
-    arp->hw_type = htons(1);
-    arp->proto_type = htons(ETHERTYPE_IP);
-    arp->hw_size = 6;
-    arp->proto_size = 4;
-    arp->opcode = htons(1);
-    memcpy(arp->sender_mac, mac_address, 6);
-    arp->sender_ip = htonl(ip_address);
-    memset(arp->target_mac, 0, 6);
-    arp->target_ip = htonl(target_ip);
-    
-    if (e1000_send_packet(packet, sizeof(struct eth_header) + sizeof(struct arp_header))) {
-        kprintf("<(0f)>ARP request sent for %s (%d.%d.%d.%d)<(07)>\n", ip_str,
-               (target_ip >> 24) & 0xFF, (target_ip >> 16) & 0xFF,
-               (target_ip >> 8) & 0xFF, target_ip & 0xFF);
-    } else {
-        kprintf("<(0f)>Failed to send ARP request<(07)>\n");
+    uint32_t resolved_host = target_host;
+    uint32_t mask_host = g_net_config.subnet_mask ? g_net_config.subnet_mask : default_subnet_mask_host();
+    if (g_net_config.gateway) {
+        if ((target_host & mask_host) != (g_net_config.ip & mask_host)) {
+            resolved_host = g_net_config.gateway;
+        }
     }
+
+    arp_request(resolved_host);
+    uint32_t print_ip = htonl(resolved_host);
+    kprintf("ARP request sent for %d.%d.%d.%d (target %s)\n",
+           (print_ip >> 24) & 0xFF, (print_ip >> 16) & 0xFF,
+           (print_ip >> 8) & 0xFF, print_ip & 0xFF, ip_str);
 }
 
 void net_ping(const char* hostname) {
     if (!e1000_mmio) {
-        kprintf("<(0f)>E1000 not initialized<(07)>\n");
+        kprintf("E1000 not initialized\n");
+        return;
+    }
+    if (!e1000_link_up()) {
+        kprintf("Network link is down\n");
         return;
     }
     
     uint32_t dest_ip = dns_resolve(hostname);
     if (dest_ip == 0) {
-        kprintf("<(0f)>Could not resolve: %s<(07)>\n", hostname);
+        kprintf("Could not resolve: %s\n", hostname);
         return;
     }
     
-    kprintf("<(0f)>Pinging %s (%d.%d.%d.%d)...<(07)>\n", hostname,
-           (dest_ip >> 24) & 0xFF, (dest_ip >> 16) & 0xFF,
-           (dest_ip >> 8) & 0xFF, dest_ip & 0xFF);
+    uint32_t print_ip = htonl(dest_ip);
+    kprintf("Pinging %s (%d.%d.%d.%d)...\n", hostname,
+           (print_ip >> 24) & 0xFF, (print_ip >> 16) & 0xFF,
+           (print_ip >> 8) & 0xFF, print_ip & 0xFF);
     
-    static uint8_t packet[1024] = {0};
-    struct eth_header* eth = (struct eth_header*)packet;
-    struct ip_header* iph = (struct ip_header*)(packet + sizeof(struct eth_header));
-    struct icmp_header* icmp = (struct icmp_header*)(packet + sizeof(struct eth_header) + sizeof(struct ip_header));
+    const char* payload_str = "AxonOS Ping Test";
+    uint16_t payload_len = (uint16_t)strlen(payload_str);
+    uint16_t ident = 0x1337;
+    static uint16_t sequence = 0;
+    uint16_t seq = ++sequence;
     
-    memcpy(eth->dst_mac, broadcast_mac, 6);
-    memcpy(eth->src_mac, mac_address, 6);
-    eth->ethertype = htons(ETHERTYPE_IP);
+    if (!icmp_send_echo(dest_ip, ident, seq, (const uint8_t*)payload_str, payload_len)) {
+        kprintf("Failed to send ICMP request\n");
+        return;
+    }
     
-    iph->version_ihl = 0x45;
-    iph->tos = 0;
-    iph->total_length = htons(sizeof(struct ip_header) + sizeof(struct icmp_header) + 8);
-    iph->identification = htons(0x1234);
-    iph->flags_fragment = 0;
-    iph->ttl = 64;
-    iph->protocol = IP_PROTOCOL_ICMP;
-    iph->checksum = 0;
-    iph->src_ip = htonl(ip_address);
-    iph->dst_ip = htonl(dest_ip);
-    iph->checksum = calculate_checksum(iph, sizeof(struct ip_header));
-    
-    icmp->type = 8;
-    icmp->code = 0;
-    icmp->checksum = 0;
-    icmp->identifier = htons(1);
-    icmp->sequence = htons(1);
-    
-    const char* ping_data = "AxonOS Ping Test";
-    memcpy(icmp->data, ping_data, strlen(ping_data));
-    
-    uint16_t icmp_length = sizeof(struct icmp_header) + strlen(ping_data);
-    icmp->checksum = calculate_checksum(icmp, icmp_length);
-    
-    uint16_t packet_length = sizeof(struct eth_header) + sizeof(struct ip_header) + icmp_length;
-    
-    if (e1000_send_packet(packet, packet_length)) {
-        kprintf("<(0f)>Ping sent to %s (%d bytes)<(07)>\n", hostname, packet_length);
+    uint8_t reply_buffer[128];
+    int received = icmp_wait_echo(dest_ip, ident, seq, reply_buffer, sizeof(reply_buffer), ICMP_WAIT_DEFAULT_ATTEMPTS);
+    if (received > 0) {
+        char text[129];
+        int copy = received < 128 ? received : 128;
+        memcpy(text, reply_buffer, copy);
+        text[copy] = '\0';
+        kprintf("Reply from %d.%d.%d.%d: %d bytes data '%s'\n",
+               (print_ip >> 24) & 0xFF, (print_ip >> 16) & 0xFF,
+               (print_ip >> 8) & 0xFF, print_ip & 0xFF,
+               received, text);
     } else {
-        kprintf("<(0f)>Failed to send ping<(07)>\n");
+        kprintf("Request timed out\n");
     }
 }
 
 void e1000_print_stats(void) {
     if (!e1000_mmio) {
-        kprintf("<(0f)>E1000 not initialized<(07)>\n");
+        kprintf("E1000 not initialized\n");
         return;
     }
     
     kprintf("Network Statistics:\n");
     kprintf("MAC: %02x:%02x:%02x:%02x:%02x:%02x\n", 
-           mac_address[0], mac_address[1], mac_address[2],
-           mac_address[3], mac_address[4], mac_address[5]);
-    {
-        uint32_t ip_print = ntohl(ip_address);
-        kprintf("IP: %d.%d.%d.%d\n", 
-               (ip_print >> 24) & 0xFF, (ip_print >> 16) & 0xFF,
-               (ip_print >> 8) & 0xFF, ip_print & 0xFF);
-    }
-    {
-        uint32_t dns_print = ntohl(dns_server);
-        kprintf("DNS: %d.%d.%d.%d\n",
-               (dns_print >> 24) & 0xFF, (dns_print >> 16) & 0xFF,
-               (dns_print >> 8) & 0xFF, dns_print & 0xFF);
-    }
+           net_mac_address[0], net_mac_address[1], net_mac_address[2],
+           net_mac_address[3], net_mac_address[4], net_mac_address[5]);
+    uint32_t ip_print = htonl(net_ip_address);
+    kprintf("IP: %d.%d.%d.%d\n",
+           (ip_print >> 24) & 0xFF, (ip_print >> 16) & 0xFF,
+           (ip_print >> 8) & 0xFF, ip_print & 0xFF);
+    uint32_t dns_print = htonl(net_dns_server);
+    kprintf("DNS: %d.%d.%d.%d\n",
+           (dns_print >> 24) & 0xFF, (dns_print >> 16) & 0xFF,
+           (dns_print >> 8) & 0xFF, dns_print & 0xFF);
     kprintf("Link: %s\n", e1000_link_up() ? "UP" : "DOWN");
     kprintf("TX: %d packets, %d bytes, %d errors\n", tx_packets, tx_bytes, tx_errors);
     kprintf("RX: %d packets, %d bytes, %d errors\n", rx_packets, rx_bytes, rx_errors);
-    kprintf("Protocols: ARP=%d, ICMP=%d, UDP=%d, DNS=%d\n", arp_packets, icmp_packets, udp_packets, dns_packets);
+    kprintf("Protocols: ARP=%d, ICMP=%d, UDP=%d, DNS=%d\n",
+           ip_get_arp_packets(), ip_get_icmp_packets(),
+           ip_get_udp_packets(), ip_get_dns_packets());
     kprintf("Ring Status: TX Tail=%d, RX Head=%d\n", e1000_read(E1000_TDT), e1000_read(E1000_RDH));
     kprintf("DNS Cache: %d entries\n", dns_cache_count);
 }
 
 void net_test_dns(void) {
     if (!e1000_mmio) {
-        kprintf("<(0f)>E1000 not initialized<(07)>\n");
+        kprintf("E1000 not initialized\n");
         return;
     }
     
-    kprintf("<(0f)>Testing DNS resolution...<(07)>\n");
+    kprintf("Testing DNS resolution...\n");
     
     const char* hosts[] = {
         "google.com",
@@ -650,18 +821,23 @@ void net_test_dns(void) {
     for (int i = 0; hosts[i] != NULL; i++) {
         uint32_t ip = dns_resolve(hosts[i]);
         if (ip != 0) {
-            kprintf("<(0f)>%s -> %d.%d.%d.%d<(07)>\n", hosts[i],
-                   (ip >> 24) & 0xFF, (ip >> 16) & 0xFF,
-                   (ip >> 8) & 0xFF, ip & 0xFF);
+            uint32_t print_ip = htonl(ip);
+            kprintf("%s -> %d.%d.%d.%d\n", hosts[i],
+                   (print_ip >> 24) & 0xFF, (print_ip >> 16) & 0xFF,
+                   (print_ip >> 8) & 0xFF, print_ip & 0xFF);
         } else {
-            kprintf("<(0f)>%s -> resolution failed<(07)>\n", hosts[i]);
+            kprintf("%s -> resolution failed\n", hosts[i]);
         }
     }
 }
 
 int net_send_to_server(const char* host, uint16_t port, const uint8_t* data, uint16_t len) {
     if (!e1000_mmio) {
-        kprintf("<(0f)>E1000 not initialized<(07)>\n");
+        kprintf("E1000 not initialized\n");
+        return 0;
+    }
+    if (!e1000_link_up()) {
+        kprintf("Network link is down\n");
         return 0;
     }
 
@@ -671,78 +847,297 @@ int net_send_to_server(const char* host, uint16_t port, const uint8_t* data, uin
     if (dest_ip == 0) {
         dest_ip = dns_resolve(host);
         if (dest_ip == 0) {
-            kprintf("<(0f)>Could not resolve destination: %s<(07)>\n", host);
+            kprintf("Could not resolve destination: %s\n", host);
             return 0;
         }
     }
 
-    uint8_t packet[E1000_TX_BUFFER_SIZE];
-    memset(packet, 0, sizeof(packet));
-
-    struct eth_header* eth = (struct eth_header*)packet;
-    struct ip_header* iph = (struct ip_header*)(packet + sizeof(struct eth_header));
-    struct udp_header* udp = (struct udp_header*)(packet + sizeof(struct eth_header) + sizeof(struct ip_header));
-    uint8_t* payload = packet + sizeof(struct eth_header) + sizeof(struct ip_header) + sizeof(struct udp_header);
-
-    uint32_t headers_len = sizeof(struct eth_header) + sizeof(struct ip_header) + sizeof(struct udp_header);
-    if (len + headers_len > E1000_TX_BUFFER_SIZE) {
-        kprintf("<(0f)>Payload too large for TX buffer (%d bytes max)<(07)>\n", E1000_TX_BUFFER_SIZE - headers_len);
+    uint8_t dest_mac[6];
+    if (!net_resolve_mac(dest_ip, dest_mac)) {
+        kprintf("Failed to resolve MAC for destination\n");
         return 0;
     }
-
-    memcpy(eth->dst_mac, broadcast_mac, 6);
-    memcpy(eth->src_mac, mac_address, 6);
-    eth->ethertype = htons(ETHERTYPE_IP);
-
-    iph->version_ihl = 0x45;
-    iph->tos = 0;
-    iph->total_length = htons(sizeof(struct ip_header) + sizeof(struct udp_header) + len);
-    iph->identification = htons(0);
-    iph->flags_fragment = 0;
-    iph->ttl = 64;
-    iph->protocol = IP_PROTOCOL_UDP;
-    iph->checksum = 0;
-    iph->src_ip = htonl(ip_address);
-    iph->dst_ip = htonl(dest_ip);
-    iph->checksum = calculate_checksum(iph, sizeof(struct ip_header));
-
-    udp->src_port = htons(12345);
-    udp->dst_port = htons(port);
-    udp->length = htons(sizeof(struct udp_header) + len);
-    udp->checksum = 0;
-
-    memcpy(payload, data, len);
-
-    uint16_t packet_length = headers_len + len;
-
-    if (e1000_send_packet(packet, packet_length)) {
-        kprintf("<(0f)>Sent %d bytes UDP -> %d.%d.%d.%d:%d<(07)>\n", packet_length,
-                (dest_ip >> 24) & 0xFF, (dest_ip >> 16) & 0xFF,
-                (dest_ip >> 8) & 0xFF, dest_ip & 0xFF, port);
-        return packet_length;
+    int sent = udp_send(dest_ip, UDP_DEFAULT_LOCAL_PORT, port, data, len);
+    if (sent > 0) {
+        uint32_t ip_print = htonl(dest_ip);
+        kprintf("Sent %d bytes UDP -> %d.%d.%d.%d:%d\n", sent,
+                (ip_print >> 24) & 0xFF, (ip_print >> 16) & 0xFF,
+                (ip_print >> 8) & 0xFF, ip_print & 0xFF, port);
     } else {
-        kprintf("<(0f)>Failed to send UDP packet to %s<(07)>\n", host);
-        return 0;
+        kprintf("Failed to send UDP packet to %s\n", host);
     }
-}
-void net_set_ip(uint32_t ip_hostorder_le) {
-    ip_address = ip_hostorder_le;
+    return sent;
 }
 
-void net_set_dns(uint32_t dns_hostorder_le) {
-    dns_server = dns_hostorder_le;
+int net_get_from_server(const char* host, uint16_t port, uint8_t* out, uint16_t max_len) {
+    if (!e1000_mmio || !out || max_len == 0) return 0;
+    if (!e1000_link_up()) {
+        kprintf("Network link is down\n");
+        return 0;
+    }
+
+    uint32_t expected_ip_host = 0;
+    if (host && *host) {
+        uint32_t expected_ip = parse_ip(host);
+        if (expected_ip == 0) {
+            expected_ip = dns_resolve(host);
+            if (expected_ip == 0) {
+                kprintf("Could not resolve source: %s\n", host);
+                return 0;
+            }
+        }
+        expected_ip_host = expected_ip;
+    }
+
+    return udp_wait(UDP_DEFAULT_LOCAL_PORT, expected_ip_host, port, out, max_len, UDP_WAIT_DEFAULT_ATTEMPTS);
+}
+
+const struct net_config* net_get_config(void) {
+    return &g_net_config;
+}
+
+void net_set_ip(uint32_t ip_hostorder) {
+    net_ip_address = ip_hostorder;
+    g_net_config.ip = ip_hostorder;
+}
+
+void net_set_dns(uint32_t dns_hostorder) {
+    net_dns_server = dns_hostorder;
+    g_net_config.dns = dns_hostorder;
+}
+
+void net_set_subnet(uint32_t mask_hostorder) {
+    g_net_config.subnet_mask = mask_hostorder;
+}
+
+void net_set_subnet_str(const char* ip_str) {
+    uint32_t be = parse_ip(ip_str);
+    if (be != 0) {
+        g_net_config.subnet_mask = be;
+    }
 }
 
 void net_set_ip_str(const char* ip_str) {
-    uint32_t p = parse_ip(ip_str);
-    if (p != 0) {
-        ip_address = htonl(p);
+    uint32_t be = parse_ip(ip_str);
+    if (be != 0) {
+        net_ip_address = be;
+        g_net_config.ip = be;
     }
 }
 
 void net_set_dns_str(const char* ip_str) {
-    uint32_t p = parse_ip(ip_str);
-    if (p != 0) {
-        dns_server = htonl(p);
+    uint32_t be = parse_ip(ip_str);
+    if (be != 0) {
+        net_dns_server = be;
+        g_net_config.dns = be;
+    }
+}
+
+void net_set_gateway(uint32_t gateway_hostorder) {
+    g_net_config.gateway = gateway_hostorder;
+}
+
+void net_set_gateway_str(const char* ip_str) {
+    uint32_t be = parse_ip(ip_str);
+    if (be != 0) {
+        g_net_config.gateway = be;
+    }
+}
+
+static int tls_append(char* buf, int cap, int pos, const char* str) {
+    if (!str || cap <= 0) return pos;
+    size_t sl = strlen(str);
+    if (pos >= cap - 1) return pos;
+    if (pos + (int)sl >= cap) sl = cap - pos - 1;
+    if (sl <= 0) return pos;
+    memcpy(buf + pos, str, sl);
+    pos += (int)sl;
+    buf[pos] = '\0';
+    return pos;
+}
+
+void net_https_get(const char* host, const char* path) {
+    if (!e1000_mmio) {
+        kprintf("E1000 not initialized\n");
+        return;
+    }
+    if (!e1000_link_up()) {
+        kprintf("Network link is down\n");
+        return;
+    }
+    if (!host || !*host) {
+        kprintf("Usage: https <host> [path]\n");
+        return;
+    }
+    const char* req_path = (path && *path) ? path : "/";
+
+    tls_session_t* session = tls_session_alloc();
+    if (!session) {
+        kprintf("TLS: no free session\n");
+        return;
+    }
+
+    kprintf("TLS connect to %s:%d\n", host, 443);
+    if (!tls_client_connect(session, host, 443)) {
+        kprintf("TLS: connect failed\n");
+        tls_session_free(session);
+        return;
+    }
+
+    int handshake_budget = 500000;
+    while (handshake_budget-- > 0) {
+        tls_result_t r = tls_session_poll(session);
+        if (r == TLS_ERR_OK) {
+            break;
+        }
+        if (r == TLS_ERR_WANT_READ || r == TLS_ERR_WANT_WRITE) {
+            continue;
+        }
+        if (r == TLS_ERR_ALERT) {
+            kprintf("TLS alert: level=%u desc=%u\n",
+                   session->pending_alert_level, session->pending_alert_desc);
+            tls_session_close(session);
+            tls_session_free(session);
+            return;
+        }
+        kprintf("TLS handshake error (%d)\n", r);
+        tls_session_close(session);
+        tls_session_free(session);
+        return;
+    }
+
+    if (session->state != TLS_STATE_ESTABLISHED) {
+        kprintf("TLS handshake timeout\n");
+        tls_session_close(session);
+        tls_session_free(session);
+        return;
+    }
+
+    kprintf("TLS handshake complete\n");
+
+    char req[512];
+    int pos = 0;
+    req[0] = '\0';
+    pos = tls_append(req, sizeof(req), pos, "GET ");
+    pos = tls_append(req, sizeof(req), pos, req_path);
+    pos = tls_append(req, sizeof(req), pos, " HTTP/1.1\r\nHost: ");
+    pos = tls_append(req, sizeof(req), pos, host);
+    pos = tls_append(req, sizeof(req), pos, "\r\nConnection: close\r\nUser-Agent: AxonTLS\r\nAccept: */*\r\n\r\n");
+
+    if (tls_session_write(session, (const uint8_t*)req, pos) < pos) {
+        kprintf("TLS write failed\n");
+        tls_session_close(session);
+        tls_session_free(session);
+        return;
+    }
+
+    uint8_t buf[512];
+    while (1) {
+        int r = tls_session_read(session, buf, sizeof(buf) - 1);
+        if (r > 0) {
+            buf[r] = '\0';
+            kprintf("%s", buf);
+        } else if (r == 0) {
+            break;
+        } else {
+            kprintf("TLS read error\n");
+            break;
+        }
+    }
+
+    tls_session_close(session);
+    tls_session_free(session);
+}
+
+void net_test_tcp(const char* host, uint16_t port) {
+    if (!e1000_mmio) {
+        kprintf("E1000 not initialized\n");
+        return;
+    }
+
+    uint32_t dest_ip = parse_ip(host);
+    if (dest_ip == 0) {
+        dest_ip = dns_resolve(host);
+        if (dest_ip == 0) {
+            kprintf("Could not resolve: %s\n", host);
+            return;
+        }
+    }
+
+    uint32_t print_ip = htonl(dest_ip);
+    kprintf("Opening TCP connection to %s:%d (%d.%d.%d.%d)...\n", host, port,
+           (print_ip >> 24) & 0xFF, (print_ip >> 16) & 0xFF,
+           (print_ip >> 8) & 0xFF, print_ip & 0xFF);
+
+    if (!tcp_connect(dest_ip, port)) {
+        return 0;
+    }
+
+    tcp_close();
+}
+
+static uint32_t default_subnet_mask_host(void) {
+    uint32_t mask = g_net_config.subnet_mask;
+    if (mask == 0) {
+        mask = parse_ip("255.255.255.0");
+    }
+    return mask;
+}
+
+int net_resolve_mac(uint32_t dest_hostorder, uint8_t mac_out[6]) {
+    uint32_t mask_host = g_net_config.subnet_mask ? g_net_config.subnet_mask : default_subnet_mask_host();
+    uint32_t next_hop = dest_hostorder;
+    if (g_net_config.gateway) {
+        if ((dest_hostorder & mask_host) != (g_net_config.ip & mask_host)) {
+            next_hop = g_net_config.gateway;
+        }
+    }
+    kprintf("net_resolve_mac dest=%d.%d.%d.%d next=%d.%d.%d.%d\n",
+            (htonl(dest_hostorder) >> 24) & 0xFF, (htonl(dest_hostorder) >> 16) & 0xFF,
+            (htonl(dest_hostorder) >> 8) & 0xFF, htonl(dest_hostorder) & 0xFF,
+            (htonl(next_hop) >> 24) & 0xFF, (htonl(next_hop) >> 16) & 0xFF,
+            (htonl(next_hop) >> 8) & 0xFF, htonl(next_hop) & 0xFF);
+    if (ip_resolve_mac(next_hop, mac_out)) {
+        return 1;
+    }
+    if (g_net_config.gateway && next_hop != g_net_config.gateway) {
+        return ip_resolve_mac(g_net_config.gateway, mac_out);
+    }
+    return 0;
+}
+
+void net_debug_dump(void) {
+    uint64_t tx_ring_addr = (uint64_t)(uintptr_t)tx_ring;
+    uint64_t rx_ring_addr = (uint64_t)(uintptr_t)rx_ring;
+    uint64_t rx_buf0_addr = (uint64_t)(uintptr_t)rx_buffers;
+    uint64_t tx_ring_phys_cur = tx_ring_phys ? tx_ring_phys : paging_virt_to_phys((uint64_t)(uintptr_t)tx_ring);
+    uint64_t rx_ring_phys_cur = rx_ring_phys ? rx_ring_phys : paging_virt_to_phys((uint64_t)(uintptr_t)rx_ring);
+    uint64_t rx_buf0_phys_cur = rx_buffers_phys ? rx_buffers_phys : paging_virt_to_phys((uint64_t)(uintptr_t)rx_buffers);
+    uint32_t rdbal = e1000_read(E1000_RDBAL);
+    uint32_t rdbah = e1000_read(E1000_RDBAH);
+    uint32_t tdbal = e1000_read(E1000_TDBAL);
+    uint32_t tdbah = e1000_read(E1000_TDBAH);
+    uint32_t rdh = e1000_read(E1000_RDH);
+    uint32_t rdt = e1000_read(E1000_RDT);
+    qemu_debug_printf("net_debug_dump: tx_ring=%p rx_ring=%p rx_buf0=%p\n", tx_ring, rx_ring, rx_buffers);
+    qemu_debug_printf("  RDBAL=0x%08x RDBAH=0x%08x TDBAL=0x%08x TDBAH=0x%08x\n", rdbal, rdbah, tdbal, tdbah);
+    qemu_debug_printf("  RDH=%u RDT=%u\n", rdh, rdt);
+    kprintf("net_debug_dump:\n");
+    kprintf("  tx_ring virt=%p\n", tx_ring);
+    kprintf("  tx_ring phys=0x%llx\n", (unsigned long long)tx_ring_phys_cur);
+    kprintf("  rx_ring virt=%p\n", rx_ring);
+    kprintf("  rx_ring phys=0x%llx\n", (unsigned long long)rx_ring_phys_cur);
+    kprintf("  rx_buf0 virt=%p\n", rx_buffers);
+    kprintf("  rx_buf0 phys=0x%llx\n", (unsigned long long)rx_buf0_phys_cur);
+    kprintf("  RDBAL=0x%08x RDBAH=0x%08x\n", rdbal, rdbah);
+    kprintf("  TDBAL=0x%08x TDBAH=0x%08x\n", tdbal, tdbah);
+    kprintf("  RDH=%u RDT=%u\n", rdh, rdt);
+    if (rx_ring) {
+        kprintf("  rx_ring[0].buffer_addr=0x%016llx status=0x%02x\n",
+                (unsigned long long)rx_ring[0].buffer_addr, rx_ring[0].status);
+    }
+    if (tx_ring) {
+        kprintf("  tx_ring[0].buffer_addr=0x%016llx status=0x%02x\n",
+                (unsigned long long)tx_ring[0].buffer_addr, tx_ring[0].status);
     }
 }

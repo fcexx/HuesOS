@@ -11,6 +11,11 @@
 #define E1000_TIPG     0x00410
 #define E1000_IMS      0x000D0
 #define E1000_ICR      0x000C0
+#define E1000_FCTTV    0x00170
+#define E1000_FCAL     0x02100
+#define E1000_FCAH     0x02108
+#define E1000_FCRTL    0x02160
+#define E1000_FCRTH    0x02168
 
 // Transmit Registers
 #define E1000_TDBAL    0x03800
@@ -18,6 +23,8 @@
 #define E1000_TDLEN    0x03808
 #define E1000_TDH      0x03810
 #define E1000_TDT      0x03818
+#define E1000_MTA       0x05200
+#define E1000_RA        0x05400
 
 // Receive Registers
 #define E1000_RDBAL    0x02800
@@ -25,6 +32,13 @@
 #define E1000_RDLEN    0x02808
 #define E1000_RDH      0x02810
 #define E1000_RDT      0x02818
+#define E1000_RDTR     0x02820
+#define E1000_RADV     0x0282C
+#define E1000_RXDCTL   0x02828
+#define E1000_RXDCTL_QUEUE_ENABLE (1 << 25)
+#define E1000_RXDCTL_PTHRESH_SHIFT 0
+#define E1000_RXDCTL_HTHRESH_SHIFT 8
+#define E1000_RXDCTL_WTHRESH_SHIFT 16
 
 // MAC Address Registers
 #define E1000_RAL      0x05400
@@ -41,12 +55,31 @@
 #define E1000_RCTL_SECRC   (1 << 26)
 #define E1000_RCTL_LPE     (1 << 5)
 #define E1000_RCTL_SZ_2048 (3 << 16)
+#define E1000_RCTL_UPE     (1 << 3)
+#define E1000_RCTL_MPE     (1 << 4)
+#define E1000_RCTL_SBP     (1 << 2)
+#define E1000_RCTL_BSIZE_SHIFT 16
+#define E1000_RCTL_BSEX    (1 << 25)
+#define E1000_RCTL_DPF     (1 << 10)
+#define E1000_RCTL_PMCF    (1 << 23)
+#define E1000_RCTL_CFIEN   (1 << 12)
+#define E1000_RCTL_LBM_NO  (0 << 6)
+#define E1000_RCTL_DTYP_PS (1 << 29)
 #define E1000_TXD_STAT_DD  (1 << 0)
 #define E1000_RXD_STAT_DD  (1 << 0)
 #define E1000_TXD_CMD_EOP  (1 << 0)
 #define E1000_TXD_CMD_IFCS (1 << 1)
 #define E1000_TXD_CMD_RS   (1 << 3)
+#define E1000_TCTL_EN      (1 << 1)
+#define E1000_TCTL_PSP     (1 << 3)
+#define E1000_TCTL_CT_SHIFT 4
+#define E1000_TCTL_COLD_SHIFT 12
+#define E1000_TCTL_RTLC    (1 << 24)
 #define E1000_ICR_LSC      (1 << 2)
+#define E1000_RAH_AV      (1u << 31)
+#define E1000_MDICNFG      0x00E04
+#define E1000_MDICNFG_FS   (1 << 0)
+#define E1000_MDICNFG_FP   (1 << 2)
 
 // Buffer sizes
 #define E1000_RX_BUFFER_SIZE 2048
@@ -141,6 +174,8 @@ void e1000_handle_interrupt(void);
 // Network functions
 void net_ping(const char* ip_str);
 void net_send_arp(const char* ip_str);
+void net_test_tcp(const char* host, uint16_t port);
+void net_https_get(const char* host, const char* path);
 
 // Configure network interface
 void net_set_ip(uint32_t ip_hostorder_le);
@@ -151,6 +186,8 @@ void net_set_dns_str(const char* ip_str);
 // Simple packet send API: send raw payload to a server (UDP)
 // Returns number of bytes sent on success, 0 on failure.
 int net_send_to_server(const char* host, uint16_t port, const uint8_t* data, uint16_t len);
+// Receive UDP payload from server. Returns number of bytes copied, 0 if nothing received.
+int net_get_from_server(const char* host, uint16_t port, uint8_t* out, uint16_t max_len);
 
 // DNS functions
 uint32_t dns_resolve(const char* hostname);
@@ -170,6 +207,25 @@ uint32_t parse_ip(const char* ip_str);
 
 // Global variable
 extern volatile uint32_t* e1000_mmio;
+extern uint8_t net_mac_address[6];
+extern uint8_t net_broadcast_mac[6];
+extern uint32_t net_ip_address;
+extern uint32_t net_dns_server;
+
+struct net_config {
+    uint32_t ip;
+    uint32_t subnet_mask;
+    uint32_t gateway;
+    uint32_t dns;
+};
+
+const struct net_config* net_get_config(void);
+void net_set_gateway(uint32_t gateway_hostorder_le);
+void net_set_gateway_str(const char* ip_str);
+void net_set_subnet(uint32_t mask_hostorder_le);
+void net_set_subnet_str(const char* ip_str);
+int net_resolve_mac(uint32_t dest_hostorder, uint8_t mac_out[6]);
+void net_debug_dump(void);
 
 // DNS structures
 struct dns_header {
@@ -200,6 +256,18 @@ struct udp_header {
     uint16_t dst_port;
     uint16_t length;
     uint16_t checksum;
+} __attribute__((packed));
+
+struct tcp_header {
+    uint16_t src_port;
+    uint16_t dst_port;
+    uint32_t seq;
+    uint32_t ack;
+    uint8_t offset_reserved;
+    uint8_t flags;
+    uint16_t window;
+    uint16_t checksum;
+    uint16_t urgent;
 } __attribute__((packed));
 
 // DNS cache

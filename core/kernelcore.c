@@ -182,6 +182,10 @@ void ascii_art() {
     kprintf("<(0f)>\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xDB\xDB\xDB\xDB\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xB2\xB1<(0b)>\xB0\xB0\xB1\xB2\xDB\xDB\xDB\xDB\xDB\xDB\xB2\xB1\xB0\xB0\xB1\xB2\xDB\xDB\xDB\xDB\xDB\xDB\xDB\xB2\xB1\xB0\n\n");
 }
 
+void kb_null() {
+    (void)inb(0x60);
+}
+
 void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {
     kclear();
     kprint("Initializing kernel...\n");
@@ -205,13 +209,12 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {
     ramfs_register();
     ext2_register();
     e1000_init();
-
+    
     ps2_keyboard_init();
+    //idt_set_handler(33, kb_null);
     rtc_init();
     
     asm volatile("sti");
-
-    kprintf("kernel base: done (idt, gdt, pic, pit, pci, rtc, paging, heap, keyboard)\n");
 
     static const char license_text[] =
 "MIT License\n"

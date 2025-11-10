@@ -209,14 +209,12 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {
     ramfs_register();
     ext2_register();
     e1000_init();
-
+    
     ps2_keyboard_init();
     //idt_set_handler(33, kb_null);
     rtc_init();
     
     asm volatile("sti");
-
-    kprintf("kernel base: done (idt, gdt, pic, pit, pci, rtc, paging, heap, keyboard)\n");
 
     static const char license_text[] =
 "MIT License\n"

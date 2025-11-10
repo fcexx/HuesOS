@@ -1365,6 +1365,91 @@ static int bi_ping(cmd_ctx *c) {
     return 0;
 }
 
+static int bi_https(cmd_ctx *c) {
+    if (c->argc < 2) {
+        kprintf("Usage: https <host> [path]\n");
+        return 1;
+    }
+    if (!e1000_mmio) {
+        kprintf("Network adapter not initialized\n");
+        return 1;
+    }
+    const char* path = (c->argc >= 3) ? c->argv[2] : "/";
+    net_https_get(c->argv[1], path);
+    return 0;
+}
+
+static void print_net_config(void) {
+    const struct net_config* cfg = net_get_config();
+    uint32_t ip = htonl(cfg->ip);
+    uint32_t mask_host = cfg->subnet_mask ? cfg->subnet_mask : parse_ip("255.255.255.0");
+    uint32_t mask = htonl(mask_host);
+    uint32_t gw = htonl(cfg->gateway);
+    uint32_t dns = htonl(cfg->dns);
+    kprintf("Network config:\n");
+    kprintf("  IP: %d.%d.%d.%d\n", (ip>>24)&0xFF, (ip>>16)&0xFF, (ip>>8)&0xFF, ip&0xFF);
+    kprintf("  Mask: %d.%d.%d.%d\n", (mask>>24)&0xFF, (mask>>16)&0xFF, (mask>>8)&0xFF, mask&0xFF);
+    kprintf("  Gateway: %d.%d.%d.%d\n", (gw>>24)&0xFF, (gw>>16)&0xFF, (gw>>8)&0xFF, gw&0xFF);
+    kprintf("  DNS: %d.%d.%d.%d\n", (dns>>24)&0xFF, (dns>>16)&0xFF, (dns>>8)&0xFF, dns&0xFF);
+}
+
+static int run_net_test(void) {
+    if (!e1000_mmio) {
+        kprintf("E1000 not initialized\n");
+        return 1;
+    }
+    kprintf("Network test:\n");
+    uint8_t test_packet[64];
+    memset(test_packet, 0xAA, sizeof(test_packet));
+    if (e1000_send_packet(test_packet, sizeof(test_packet))) {
+        kprintf("TX: OK\n");
+    } else {
+        kprintf("TX: Failed\n");
+    }
+    kprintf("RX: No packets\n");
+    e1000_print_stats();
+    return 0;
+}
+
+static int bi_net(cmd_ctx *c) {
+    if (c->argc == 1 || (c->argc == 2 && strcmp(c->argv[1], "show") == 0)) {
+        print_net_config();
+        e1000_print_stats();
+        return 0;
+    }
+
+    const char* sub = c->argv[1];
+    if ((strcmp(sub, "ip") == 0 || strcmp(sub, "addr") == 0) && c->argc >= 3) {
+        net_set_ip_str(c->argv[2]);
+        print_net_config();
+        return 0;
+    }
+    if ((strcmp(sub, "mask") == 0 || strcmp(sub, "netmask") == 0) && c->argc >= 3) {
+        net_set_subnet_str(c->argv[2]);
+        print_net_config();
+        return 0;
+    }
+    if ((strcmp(sub, "gw") == 0 || strcmp(sub, "gateway") == 0) && c->argc >= 3) {
+        net_set_gateway_str(c->argv[2]);
+        print_net_config();
+        return 0;
+    }
+    if ((strcmp(sub, "dns") == 0) && c->argc >= 3) {
+        net_set_dns_str(c->argv[2]);
+        print_net_config();
+        return 0;
+    }
+    if (strcmp(sub, "test")==0) {
+        return run_net_test();
+    }
+    if (strcmp(sub, "debug") == 0) {
+        net_debug_dump();
+        return 0;
+    }
+
+    kprintf("Usage: net [show]|ip <addr>|mask <mask>|gw <addr>|dns <addr>|test|debug\n");
+    return 1;
+}
 static int bi_net_test(cmd_ctx *c) {
     (void)c;
     

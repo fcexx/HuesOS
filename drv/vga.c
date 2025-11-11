@@ -45,6 +45,24 @@ void vga_fill_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint8_t ch, u
     }
 }
 
+uint32_t vga_write_colorized_xy(uint32_t x, uint32_t y, const char *s, uint8_t default_attr) {
+    if (y >= MAX_ROWS) return 0;
+    uint8_t color = default_attr;
+    uint32_t vx = 0;
+    const char* p = s;
+    while (*p && (x + vx) < MAX_COLS) {
+        size_t ahead = strnlen(p, 6);
+        if (ahead >= 6 && p[0] == '<' && p[1] == '(' && p[4] == ')' && p[5] == '>') {
+            color = parse_color_code(p[2], p[3]);
+            p += 6;
+            continue;
+        }
+        vga_putch_xy(x + vx, y, (uint8_t)*p++, color);
+        vx++;
+    }
+    return vx;
+}
+
 void	kprint(uint8_t *str)
 {
 	while (*str)
@@ -509,6 +527,8 @@ static void __bw_putc(__bufw* w, char ch) {
 	w->len++;
 }
 
+static char tmp[64];
+
 static int __vsnprintf(char* out, size_t outsz, const char* fmt, va_list ap_in) {
 	if (!out || outsz==0) return 0;
 	__bufw W = { .buf = out, .cap = outsz, .len = 0 };
@@ -524,8 +544,7 @@ static int __vsnprintf(char* out, size_t outsz, const char* fmt, va_list ap_in) 
 		if (*p=='.') { p++; if (*p=='*'){ (void)va_arg(ap,int); p++; } else { while (*p>='0'&&*p<='9') p++; } }
 		// length
 		if (*p=='h'||*p=='l'||*p=='z') { if ((p[0]=='h'&&p[1]=='h')||(p[0]=='l'&&p[1]=='l')) p+=2; else p++; }
-		char spec = *p ? *p++ : '\0';
-		char tmp[64]; int n=0;
+		char spec = *p ? *p++ : '\0'; int n=0;
 		switch (spec) {
 			case 'c': { int ch=va_arg(ap,int); __bw_putc(&W,(char)ch); break; }
 			case 's': { const char* s=va_arg(ap,const char*); if(!s)s="(null)"; while(*s) __bw_putc(&W,*s++); break; }

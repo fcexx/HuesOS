@@ -5,6 +5,10 @@
 extern "C" {
 #endif
 
+#define OSH_NAME "osh"
+#define OSH_VERSION "0.1"
+#define OSH_FULL_NAME "axonsh"
+
 // Запуск командного интерпретатора osh (bash-подобный)
 void osh_run(void);
 

@@ -31,10 +31,10 @@ static const Theme THEMES[] = {
 };
 static const int THEME_COUNT = sizeof(THEMES)/sizeof(THEMES[0]);
 static int g_theme_index = 0;
-static uint8_t g_attr_menu = 0x1F;
-static uint8_t g_attr_status = 0x70;
-static uint8_t g_attr_text = 0x0F;
-static uint8_t g_attr_text_dim = 0x07;
+static uint8_t g_attr_menu = 0x78;
+static uint8_t g_attr_status = 0x78;
+static uint8_t g_attr_text = 0x8F;
+static uint8_t g_attr_text_dim = 0x87;
 
 // View cache to avoid flicker (only update changed cells)
 static uint16_t g_view_cache[VIEW_H][VIEW_W];
@@ -78,6 +78,7 @@ typedef struct {
 	int cursor_row; // 0-based in buffer
 	int cursor_col; // 0-based in line
 	int view_top;   // first visible buffer row
+	int view_left;  // first visible buffer column (for horizontal scrolling)
 
 	int insert_mode; // 1 insert, 0 overwrite
 	int modified;
@@ -121,6 +122,7 @@ static void buf_init(Editor *E) {
 	E->cursor_row = 0;
 	E->cursor_col = 0;
 	E->view_top = 0;
+	E->view_left = 0;
 	E->insert_mode = 1;
 	E->modified = 0;
 	E->filename[0] = '\0';
@@ -143,7 +145,7 @@ static void buf_clear(Editor *E) {
 	E->lines[0].data = (char*)kcalloc(64, 1);
 	E->lines[0].len = 0;
 	E->lines[0].cap = 64;
-	E->cursor_row = 0; E->cursor_col = 0; E->view_top = 0; E->modified = 0;
+	E->cursor_row = 0; E->cursor_col = 0; E->view_top = 0; E->view_left = 0; E->modified = 0;
 }
 
 static void buf_ensure_lines(Editor *E, int need) {
@@ -294,9 +296,13 @@ static void ui_draw_status(Editor *E, const char *msg) {
 	}
 }
 
+static int g_view_left_cur = 0;
 static void draw_line_text(uint32_t y, const char *s, size_t len) {
-	// draw line content truncated/padded to width
+	// draw line content starting from horizontal offset g_view_left_cur
 	uint32_t x = 0;
+    if (!s) { s=""; len=0; }
+    if ((size_t)g_view_left_cur < len) { s += g_view_left_cur; len -= (size_t)g_view_left_cur; }
+    else { s += len; len = 0; }
     if (!g_view_cache_valid) { for (uint32_t iy=0; iy<VIEW_H; iy++) for (uint32_t ix=0; ix<VIEW_W; ix++) g_view_cache[iy][ix]=0xFFFF; g_view_cache_valid=1; }
     for (; x < VIEW_W && x < (uint32_t)len; x++) {
         uint16_t v = ((uint16_t)g_attr_text << 8) | (uint8_t)s[x];
@@ -318,13 +324,29 @@ static void draw_line_text(uint32_t y, const char *s, size_t len) {
 
 static void ui_draw_view(Editor *E) {
 	// draw visible buffer lines
+    g_view_left_cur = (E->view_left < 0) ? 0 : E->view_left;
+    if (!g_view_cache_valid) {
+        // Clear view area to prevent mixing after large viewport jumps
+        for (uint32_t iy = 0; iy < VIEW_H; iy++) {
+            uint32_t y = VIEW_Y0 + iy;
+            for (uint32_t x = 0; x < VIEW_W; x++) {
+                vga_putch_xy(x, y, ' ', g_attr_text);
+                g_view_cache[iy][x] = 0xFFFF;
+            }
+        }
+        g_view_cache_valid = 1;
+    }
 	for (int i = 0; i < VIEW_H; i++) {
 		int r = E->view_top + i;
 		if (r >= 0 && r < E->line_count) {
 			Line *L = &E->lines[r];
-			if (E->syntax_mode == 1) draw_line_text_asm(VIEW_Y0 + (uint32_t)i, L->data ? L->data : "", L->len);
-			else if (E->syntax_mode == 2) draw_line_text_osh(VIEW_Y0 + (uint32_t)i, L->data ? L->data : "", L->len);
-			else draw_line_text(VIEW_Y0 + (uint32_t)i, L->data ? L->data : "", L->len);
+            const char* ls = L->data ? L->data : "";
+            size_t llen = L->len;
+            if ((size_t)g_view_left_cur < llen) { ls += g_view_left_cur; llen -= (size_t)g_view_left_cur; }
+            else { ls += llen; llen = 0; }
+			if (E->syntax_mode == 1) draw_line_text_asm(VIEW_Y0 + (uint32_t)i, ls, llen);
+			else if (E->syntax_mode == 2) draw_line_text_osh(VIEW_Y0 + (uint32_t)i, ls, llen);
+			else draw_line_text(VIEW_Y0 + (uint32_t)i, ls, llen);
 		} else {
 			// beyond EOF -> dim tildes like vim
 			if (r >= E->line_count) {
@@ -552,11 +574,14 @@ static void ensure_cursor_visible(Editor *E) {
 	if (E->cursor_row < E->view_top) E->view_top = E->cursor_row;
 	if (E->cursor_row >= E->view_top + VIEW_H) E->view_top = E->cursor_row - VIEW_H + 1;
 	if (E->view_top < 0) E->view_top = 0;
+    if (E->cursor_col < E->view_left) E->view_left = E->cursor_col;
+    if (E->cursor_col >= E->view_left + (int)VIEW_W) E->view_left = E->cursor_col - (int)VIEW_W + 1;
+    if (E->view_left < 0) E->view_left = 0;
 }
 
 static void ui_place_cursor(Editor *E) {
 	int scr_y = VIEW_Y0 + (E->cursor_row - E->view_top);
-	int scr_x = E->cursor_col;
+	int scr_x = E->cursor_col - E->view_left;
 	if (scr_y < VIEW_Y0) scr_y = VIEW_Y0;
 	if (scr_y >= VIEW_Y0 + VIEW_H) scr_y = VIEW_Y0 + VIEW_H - 1;
 	if (scr_x < 0) scr_x = 0;
@@ -716,7 +741,7 @@ static int file_load(Editor *E, const char *path) {
 		if (i < sz && buf[i] == '\n') i++;
 	}
 	if (E->line_count == 0) { E->line_count = 1; E->lines[0].data = (char*)kcalloc(16,1); E->lines[0].len=0; E->lines[0].cap=16; }
-	E->cursor_row = 0; E->cursor_col = 0; E->view_top = 0; E->modified = 0;
+	E->cursor_row = 0; E->cursor_col = 0; E->view_top = 0; E->view_left = 0; E->modified = 0;
 	kfree(buf);
 	return 0;
 }
@@ -817,22 +842,26 @@ static void fix_duplicate_tail(char* path) {
 static void move_left(Editor *E) {
 	if (E->cursor_col > 0) { E->cursor_col--; }
 	else if (E->cursor_row > 0) { E->cursor_row--; E->cursor_col = (int)E->lines[E->cursor_row].len; }
+    ensure_cursor_visible(E);
 }
 
 static void move_right(Editor *E) {
 	Line *L = &E->lines[E->cursor_row];
 	if (E->cursor_col < (int)L->len) { E->cursor_col++; }
 	else if (E->cursor_row + 1 < E->line_count) { E->cursor_row++; E->cursor_col = 0; }
+    ensure_cursor_visible(E);
 }
 
 static void move_up(Editor *E) {
 	if (E->cursor_row > 0) E->cursor_row--;
 	int len = (int)E->lines[E->cursor_row].len; if (E->cursor_col > len) E->cursor_col = len;
+    ensure_cursor_visible(E);
 }
 
 static void move_down(Editor *E) {
 	if (E->cursor_row + 1 < E->line_count) E->cursor_row++;
 	int len = (int)E->lines[E->cursor_row].len; if (E->cursor_col > len) E->cursor_col = len;
+    ensure_cursor_visible(E);
 }
 
 static void move_home(Editor *E) { E->cursor_col = 0; }
@@ -874,8 +903,9 @@ void editor_run(const char *path) {
 	int running = 1;
 	while (running) {
 		char c = kgetc();
-		int redraw = 0, restatus = 0;
-		int old_view_top = E.view_top;
+        int redraw = 0, restatus = 0;
+        int old_view_top = E.view_top;
+        int old_view_left = E.view_left;
 		if (c == 27) { // ESC: игнорировать (меню отключено)
 			continue;
 		}
@@ -957,9 +987,13 @@ void editor_run(const char *path) {
             view_cache_invalidate_line_with_viewtop(E.view_top, E.cursor_row);
             view_cache_invalidate_line_with_viewtop(E.view_top, E.cursor_row - 1);
         }
-		if (E.view_top != old_view_top) redraw = 1;
-		if (redraw) { ui_draw_view(&E); }
-		if (redraw || restatus) { ui_draw_status(&E, 0); }
+        // If viewport changed in any direction, force full redraw and reset cache
+        if (E.view_top != old_view_top || E.view_left != old_view_left) {
+            g_view_cache_valid = 0;
+            redraw = 1;
+        }
+        if (redraw) { ui_draw_view(&E); }
+        if (redraw || restatus) { ui_draw_status(&E, 0); }
 		ui_place_cursor(&E);
 	}
 

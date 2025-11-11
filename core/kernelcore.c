@@ -210,38 +210,27 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {
     
     asm volatile("sti");
 
-    kprintf("kernel base: done (idt, gdt, pic, pit, pci, rtc, paging, heap, keyboard)\n");
+    kprintf("kernel base: done\n");
 
     static const char license_text[] = "#!osh\n"
 
-"echo \"\"\n"
-"while 1==1 {\n"
-"    input = %(readline)\n"
-"    if input == \"exit\" {\n"
-"        exit\n"
-"    } else if input == \"hello\" {\n"
-"        echo \"Hello, world!\"\n"
-"    } else {\n"
-"        echo \"Unknown command: $input\"\n"
-"    }\n"
-"}\n";
-    struct fs_file *license_file = fs_create_file("/demo");
+"hostname=\"<(0f)>axonos<(07)>\"\n"
+"PS1=\"$hostname:[\\w]> \"\n"
+"osh\n"
+"shutdown\n";
+    struct fs_file *license_file = fs_create_file("/start");
     if (license_file) {
         fs_write(license_file, license_text, strlen(license_text), 0);
         fs_file_free(license_file);
     }
     ascii_art();
-    // Показываем текущее время из RTC
-    rtc_datetime_t current_time;
-    rtc_read_datetime(&current_time);
-    kprintf("Current date and time: %02d/%02d/%d %02d:%02d:%02d\n", 
-        current_time.day, current_time.month, current_time.year,
-        current_time.hour, current_time.minute, current_time.second);
     
     kprintf("\n<(0f)>Welcome to %s <(0b)>%s<(0f)>!\n", OS_NAME, OS_VERSION);
-    kprint("OSH v0.1 (axosh)\n");
-
-    ring0_shell();  
+    // autostart: run /start script once if present
+    {
+        struct fs_file *f = fs_open("/start");
+        if (f) { fs_file_free(f); (void)exec_line("osh /start"); }
+    }
 
     kprint("\nShutting down in 5 seconds...");
     pit_sleep_ms(5000);

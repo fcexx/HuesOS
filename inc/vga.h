@@ -31,3 +31,5 @@ void vga_putch_xy(uint32_t x, uint32_t y, uint8_t ch, uint8_t attr);
 void vga_clear_screen_attr(uint8_t attr);
 void vga_write_str_xy(uint32_t x, uint32_t y, const char *s, uint8_t attr);
 void vga_fill_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint8_t ch, uint8_t attr);
+// Colorized write with inline tags <(bgfg)>; returns number of visible columns written
+uint32_t vga_write_colorized_xy(uint32_t x, uint32_t y, const char *s, uint8_t default_attr);

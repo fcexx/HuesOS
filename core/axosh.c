@@ -217,6 +217,20 @@ static void strip_matching_quotes(char* s) {
     }
 }
 
+static int hex_value(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return 10 + (c - 'a');
+    if (c >= 'A' && c <= 'F') return 10 + (c - 'A');
+    return -1;
+}
+
+static int osh_exec_subcommand(const char* line, char **out_value);
+static int osh_eval_command_subst(char* expr_buf, int* handled, char** out_value);
+static int osh_eval_function_call(char* expr_buf, int* handled, char** out_value);
+static int osh_eval_rhs(char* expr_buf, char** out_value);
+static int osh_eval_expr_to_string(const char* expr, char** out_value);
+static int osh_assign_value(const char* name, char* rhs);
+
 static int osh_try_parse_number(const char* text, double* out_val) {
     if (!text) return 0;
     const char* p = text;
@@ -375,7 +389,7 @@ static token* lex(const char *line, int *out_n) {
 static void free_tokens(token *v, int n) { for (int i=0;i<n;i++) if (v[i].t==T_WORD && v[i].s) kfree(v[i].s); kfree(v); }
 
 // Forward declaration for script engine to call command executor
-static int exec_line(const char *line);
+int exec_line(const char *line);
 
 // -------- simple arithmetic parser for assignments (double) --------
 static double osh_parse_expr(const char** ps);
@@ -427,22 +441,35 @@ static double osh_parse_expr(const char** ps){
 
 static void osh_double_to_str(double val, char* out, size_t outsz){
     if (outsz==0) return;
-    // handle NaN/Inf not expected; simple fixed 6 decimals, trim zeros
-    long long ip = (long long)(val);
-    double frac = val - (double)ip;
-    if (frac < 0) frac = -frac;
+    // handle NaN/Inf not expected; round to 6 decimals, trim trailing zeros
+    double scaled = val * 1000000.0;
+    long long int_scaled = (scaled >= 0.0)
+        ? (long long)(scaled + 0.5)
+        : (long long)(scaled - 0.5);
+    double rounded = (double)int_scaled / 1000000.0;
+    int neg = (rounded < 0.0);
+    double abs_val = neg ? -rounded : rounded;
+    long long ip = (long long)abs_val;
+    double frac = abs_val - (double)ip;
+    int fd = (int)(frac*1000000.0 + 0.5);
+    if (fd >= 1000000) { fd -= 1000000; ip += 1; }
+
     // convert integer part
-    char ibuf[64]; int in=0; long long t = ip; int neg = 0;
-    if (t==0){ ibuf[in++]='0'; }
-    else {
-        if (t<0){ neg=1; t = -t; }
-        char tmp[32]; int k=0; while (t){ tmp[k++] = (char)('0' + (t%10)); t/=10; }
+    char ibuf[64]; int in=0; long long t = ip;
+    if (t==0){
         if (neg) ibuf[in++]='-';
+        ibuf[in++]='0';
+    } else {
+        if (neg) ibuf[in++]='-';
+        char tmp[32]; int k=0;
+        while (t){
+            tmp[k++] = (char)('0' + (t%10));
+            t/=10;
+        }
         for (int i=k-1;i>=0;i--) ibuf[in++]=tmp[i];
     }
     ibuf[in]='\0';
     // fractional with 6 digits
-    int fd = (int)(frac*1000000.0 + 0.5);
     char fbuf[16]; int fn=0;
     if (fd>0){
         // write 6 digits with leading zeros
@@ -485,9 +512,30 @@ static int g_script_depth = 0;
 #define OSH_SCRIPT_OK 0
 #define OSH_SCRIPT_EXIT 100
 #define OSH_SCRIPT_ABORT 101
+#define OSH_SCRIPT_RETURN 102
+
+static osh_script_ctx* g_active_script_ctx = NULL;
+static int g_script_return_pending = 0;
+static char* g_script_return_value = NULL;
 
 static int osh_find_func(osh_script_ctx* C, const char* nm) {
     for (int i=0;i<C->nfuncs;i++) if (strcmp(C->funcs[i].name, nm)==0) return i; return -1;
+}
+
+static int osh_eval_expr_to_string(const char* expr, char** out_value) {
+    if (out_value) *out_value = NULL;
+    size_t len = expr ? strlen(expr) : 0;
+    char* tmp = (char*)kcalloc(len + 1, 1);
+    if (!tmp) return 1;
+    if (expr && len) memcpy(tmp, expr, len + 1);
+    int rc = osh_eval_rhs(tmp, out_value);
+    kfree(tmp);
+    if (rc == OSH_SCRIPT_ABORT || rc == OSH_SCRIPT_EXIT || rc == OSH_SCRIPT_RETURN) {
+        if (out_value && *out_value) { kfree(*out_value); *out_value = NULL; }
+        return rc;
+    }
+    if (out_value && !*out_value) *out_value = (char*)kcalloc(1,1);
+    return rc;
 }
 
 static int osh_eval_cond(const char* expr) {
@@ -521,52 +569,67 @@ static int osh_eval_cond(const char* expr) {
         trim_spaces(left);
         trim_spaces(right);
 
-        double lv = 0.0, rv = 0.0;
-        int left_is_num = osh_try_parse_number(left, &lv);
-        int right_is_num = osh_try_parse_number(right, &rv);
-        int both_numeric = left_is_num && right_is_num;
+        char* left_val = NULL;
+        char* right_val = NULL;
+        int rc_left = osh_eval_expr_to_string(left, &left_val);
+        int rc_right = osh_eval_expr_to_string(right, &right_val);
+        if (rc_left == 0 && rc_right == 0) {
+            if (!left_val) left_val = (char*)kcalloc(1,1);
+            if (!right_val) right_val = (char*)kcalloc(1,1);
+            double lv = 0.0, rv = 0.0;
+            int left_is_num = osh_try_parse_number(left_val, &lv);
+            int right_is_num = osh_try_parse_number(right_val, &rv);
+            int both_numeric = left_is_num && right_is_num;
 
-        if (which == 0 || which == 1) {
-            if (both_numeric) {
-                double eps = 1e-9;
-                res = (which == 0)
-                    ? ((lv - rv < eps) && (rv - lv < eps))
-                    : !((lv - rv < eps) && (rv - lv < eps));
-            } else {
-                char ls[256], rs[256];
-                strncpy(ls, left, sizeof(ls)-1); ls[sizeof(ls)-1]='\0';
-                strncpy(rs, right, sizeof(rs)-1); rs[sizeof(rs)-1]='\0';
-                strip_matching_quotes(ls);
-                strip_matching_quotes(rs);
-                int cmp = strcmp(ls, rs);
-                res = (which == 0) ? (cmp == 0) : (cmp != 0);
-            }
-        } else {
-            if (both_numeric) {
-                double eps = 1e-9;
-                switch (which) {
-                    case 2: res = (lv <= rv + eps); break;
-                    case 3: res = (lv + eps >= rv); break;
-                    case 4: res = (lv < rv - eps); break;
-                    case 5: res = (lv > rv + eps); break;
+            if (which == 0 || which == 1) {
+                if (both_numeric) {
+                    double eps = 1e-9;
+                    res = (which == 0)
+                        ? ((lv - rv < eps) && (rv - lv < eps))
+                        : !((lv - rv < eps) && (rv - lv < eps));
+                } else {
+                    strip_matching_quotes(left_val);
+                    strip_matching_quotes(right_val);
+                    int cmp = strcmp(left_val, right_val);
+                    res = (which == 0) ? (cmp == 0) : (cmp != 0);
                 }
             } else {
-                char ls[256], rs[256];
-                strncpy(ls, left, sizeof(ls)-1); ls[sizeof(ls)-1]='\0';
-                strncpy(rs, right, sizeof(rs)-1); rs[sizeof(rs)-1]='\0';
-                strip_matching_quotes(ls);
-                strip_matching_quotes(rs);
-                int cmp = strcmp(ls, rs);
-                switch (which) {
-                    case 2: res = (cmp <= 0); break;
-                    case 3: res = (cmp >= 0); break;
-                    case 4: res = (cmp < 0); break;
-                    case 5: res = (cmp > 0); break;
+                if (both_numeric) {
+                    double eps = 1e-9;
+                    switch (which) {
+                        case 2: res = (lv <= rv + eps); break;
+                        case 3: res = (lv + eps >= rv); break;
+                        case 4: res = (lv < rv - eps); break;
+                        case 5: res = (lv > rv + eps); break;
+                    }
+                } else {
+                    strip_matching_quotes(left_val);
+                    strip_matching_quotes(right_val);
+                    int cmp = strcmp(left_val, right_val);
+                    switch (which) {
+                        case 2: res = (cmp <= 0); break;
+                        case 3: res = (cmp >= 0); break;
+                        case 4: res = (cmp < 0); break;
+                        case 5: res = (cmp > 0); break;
+                    }
                 }
             }
         }
+        if (left_val) kfree(left_val);
+        if (right_val) kfree(right_val);
     } else {
-        res = (e && *e);
+        char* val = NULL;
+        if (osh_eval_expr_to_string(e, &val) == 0) {
+            if (!val) val = (char*)kcalloc(1,1);
+            double v = 0.0;
+            if (osh_try_parse_number(val, &v)) {
+                res = (v != 0.0);
+            } else {
+                strip_matching_quotes(val);
+                res = (val[0] != '\0');
+            }
+        }
+        if (val) kfree(val);
     }
 
     if (ei) kfree(ei);
@@ -702,7 +765,7 @@ static int osh_collect_if_branches(osh_script_ctx* C, int header_line, osh_if_br
     if (out_next_line) *out_next_line = scan;
     return count;
 }
-static int osh_call_func(osh_script_ctx* C, int fi, char** args, int ac) {
+static int osh_call_func(osh_script_ctx* C, int fi, char** args, int ac, char** out_ret) {
     const int pc = C->funcs[fi].pc;
     const char* saved_names[8];
     char* saved_vals[8];
@@ -717,13 +780,58 @@ static int osh_call_func(osh_script_ctx* C, int fi, char** args, int ac) {
             if (copy) memcpy(copy, old, len+1);
         }
         saved_vals[i] = copy;
-        var_set(pname, (i<ac && args[i]) ? args[i] : "");
+        char* source = (i<ac && args[i]) ? args[i] : NULL;
+        char* arg_copy = NULL;
+        if (source) {
+            size_t sl = strlen(source);
+            arg_copy = (char*)kcalloc(sl+1,1);
+            if (arg_copy) memcpy(arg_copy, source, sl+1);
+        } else {
+            arg_copy = (char*)kcalloc(1,1);
+        }
+        char* evaluated = NULL;
+        int eval_rc = osh_eval_rhs(arg_copy ? arg_copy : "", &evaluated);
+        if (arg_copy) kfree(arg_copy);
+        if (eval_rc == OSH_SCRIPT_ABORT || eval_rc == OSH_SCRIPT_EXIT || eval_rc == OSH_SCRIPT_RETURN) {
+            for (int j=0;j<=i;j++){
+                if (saved_vals[j]) { var_set(saved_names[j], saved_vals[j]); kfree(saved_vals[j]); }
+                else var_set(saved_names[j], "");
+            }
+            if (evaluated) kfree(evaluated);
+            return eval_rc;
+        }
+        var_set(pname, evaluated ? evaluated : "");
+        if (evaluated) kfree(evaluated);
     }
+    osh_script_ctx* prev_ctx = g_active_script_ctx;
+    int prev_flag = g_script_return_pending;
+    char* prev_ret = g_script_return_value;
+    g_active_script_ctx = C;
+    g_script_return_pending = 0;
+    g_script_return_value = NULL;
+
     int rc = osh_exec_range(C, C->funcs[fi].start, C->funcs[fi].end);
+
+    char* func_ret = g_script_return_value;
+    int has_ret = g_script_return_pending;
+
+    g_active_script_ctx = prev_ctx;
+    g_script_return_pending = prev_flag;
+    g_script_return_value = prev_ret;
+
     for (int i=0;i<pc && i<8;i++){
         const char* pname = saved_names[i];
         if (saved_vals[i]) { var_set(pname, saved_vals[i]); kfree(saved_vals[i]); }
         else var_set(pname, "");
+    }
+
+    if (has_ret) {
+        if (out_ret) *out_ret = func_ret ? func_ret : (char*)kcalloc(1,1);
+        else if (func_ret) kfree(func_ret);
+        return OSH_SCRIPT_OK;
+    } else {
+        if (func_ret) kfree(func_ret);
+        if (out_ret) *out_ret = (char*)kcalloc(1,1);
     }
     return rc;
 }
@@ -764,6 +872,7 @@ static int osh_exec_range(osh_script_ctx* C, int L, int R) {
                         if (rc_line == OSH_SCRIPT_EXIT) exec_rc = OSH_SCRIPT_EXIT;
                         else if (rc_line == 2) exec_rc = OSH_SCRIPT_EXIT;
                         else if (rc_line == OSH_SCRIPT_ABORT) exec_rc = OSH_SCRIPT_ABORT;
+                        else if (rc_line == OSH_SCRIPT_RETURN) exec_rc = OSH_SCRIPT_RETURN;
                     } else if (!branches[bi].inline_cmd) {
                         exec_rc = osh_exec_range(C, branches[bi].body_start, branches[bi].body_end);
                     }
@@ -806,6 +915,7 @@ static int osh_exec_range(osh_script_ctx* C, int L, int R) {
                         if (rc_line == OSH_SCRIPT_EXIT) return OSH_SCRIPT_EXIT;
                         if (rc_line == 2) return OSH_SCRIPT_EXIT;
                         if (rc_line == OSH_SCRIPT_ABORT) return OSH_SCRIPT_ABORT;
+                        if (rc_line == OSH_SCRIPT_RETURN) return OSH_SCRIPT_RETURN;
                     }
                     if (++guard > 100000) break;
                 }
@@ -915,8 +1025,10 @@ static int osh_exec_range(osh_script_ctx* C, int L, int R) {
                     if (trimmed) {
                         if ((trimmed[0] || had_quote || ti>0 || ac>0) && ac < 8) args[ac++] = trimmed; else kfree(trimmed);
                     }
-                    int call_rc = osh_call_func(C, fi, args, ac);
+                    char* ret_tmp = NULL;
+                    int call_rc = osh_call_func(C, fi, args, ac, &ret_tmp);
                     for (int i2=0;i2<ac;i2++) if (args[i2]) kfree(args[i2]);
+                    if (ret_tmp) kfree(ret_tmp);
                     if (call_rc != OSH_SCRIPT_OK) return call_rc;
                     li++; continue;
                 }
@@ -927,6 +1039,7 @@ static int osh_exec_range(osh_script_ctx* C, int L, int R) {
         if (rc == OSH_SCRIPT_EXIT) return OSH_SCRIPT_EXIT;
         if (rc == 2) return 2;
         if (rc == OSH_SCRIPT_ABORT) return OSH_SCRIPT_ABORT;
+        if (rc == OSH_SCRIPT_RETURN) return OSH_SCRIPT_RETURN;
         li++;
         if (li == prev_li) li++;
     }
@@ -937,7 +1050,7 @@ static int osh_exec_range(osh_script_ctx* C, int L, int R) {
 typedef struct { char **argv; int argc; const char *in; char **out; size_t *out_len; size_t *out_cap; } cmd_ctx;
 
 // forward to allow builtins to execute lines
-static int exec_line(const char *line);
+int exec_line(const char *line);
 
 static int out_printf(cmd_ctx *c, const char *s) { osh_write(c->out, c->out_len, c->out_cap, s); return 0; }
 
@@ -957,6 +1070,121 @@ static int bi_cd(cmd_ctx *c) {
 }
 
 static int bi_cls(cmd_ctx *c) { (void)c; kclear(); return 0; }
+
+static int bi_readline(cmd_ctx *c) {
+    char prompt_buf[256];
+    prompt_buf[0] = '\0';
+    if (c->argc > 1) {
+        size_t pos = 0;
+        for (int i = 1; i < c->argc; i++) {
+            const char* part = c->argv[i] ? c->argv[i] : "";
+            size_t L = strlen(part);
+            if (pos && pos < sizeof(prompt_buf) - 1) {
+                prompt_buf[pos++] = ' ';
+            }
+            if (L > sizeof(prompt_buf) - 1 - pos) {
+                L = sizeof(prompt_buf) - 1 - pos;
+            }
+            if (L > 0) {
+                memcpy(prompt_buf + pos, part, L);
+                pos += L;
+            }
+            if (pos >= sizeof(prompt_buf) - 1) break;
+        }
+        prompt_buf[pos] = '\0';
+    }
+    const char* prompt = prompt_buf;
+    char cwd[256]; osh_get_cwd(cwd, sizeof(cwd));
+    char linebuf[512];
+    int n = osh_line_read(prompt, cwd, linebuf, (int)sizeof(linebuf));
+    if (n < 0) {
+        if (osh_line_was_ctrlc()) return OSH_SCRIPT_ABORT;
+        linebuf[0] = '\0';
+    } else {
+        if (n >= (int)sizeof(linebuf)) n = (int)sizeof(linebuf) - 1;
+        linebuf[n] = '\0';
+    }
+    osh_write(c->out, c->out_len, c->out_cap, linebuf);
+    return 0;
+}
+
+static int bi_readkey(cmd_ctx *c) {
+    (void)c;
+    char ch = kgetc();
+    if (ch == 3) {
+        keyboard_consume_ctrlc();
+        return OSH_SCRIPT_ABORT;
+    }
+    unsigned char uc = (unsigned char)ch;
+    char outbuf[8];
+    if (uc >= 32 && uc < 127) {
+        outbuf[0] = (char)uc;
+        outbuf[1] = '\0';
+    } else {
+        static const char hex_digits[] = "0123456789ABCDEF";
+        outbuf[0] = '0';
+        outbuf[1] = 'x';
+        outbuf[2] = hex_digits[(uc >> 4) & 0xF];
+        outbuf[3] = hex_digits[uc & 0xF];
+        outbuf[4] = '\0';
+    }
+    osh_write(c->out, c->out_len, c->out_cap, outbuf);
+    return 0;
+}
+
+static int bi_kprint(cmd_ctx *c) {
+    if (c->argc <= 1) return 0;
+    size_t alloc = 1;
+    for (int i = 1; i < c->argc; i++) {
+        if (c->argv[i]) alloc += strlen(c->argv[i]);
+        if (i + 1 < c->argc) alloc++;
+    }
+    char *buf = (char*)kcalloc(alloc, 1);
+    if (!buf) return 1;
+    size_t pos = 0;
+    for (int i = 1; i < c->argc; i++) {
+        const char* s = c->argv[i] ? c->argv[i] : "";
+        for (size_t j = 0; s[j]; j++) {
+            if (pos + 1 >= alloc) break;
+            char ch = s[j];
+            if (ch == '\\' && s[j+1]) {
+                j++;
+                char esc = s[j];
+                if (esc == 'n') { buf[pos++] = '\n'; }
+                else if (esc == 't') { buf[pos++] = '\t'; }
+                else if (esc == 'r') { buf[pos++] = '\r'; }
+                else if (esc == '\\') { buf[pos++] = '\\'; }
+                else if (esc == '"') { buf[pos++] = '"'; }
+                else if (esc == 'x') {
+                    int value = 0;
+                    int consumed = 0;
+                    while (consumed < 2 && s[j+1]) {
+                        int hv = hex_value(s[j+1]);
+                        if (hv < 0) break;
+                        value = (value << 4) | hv;
+                        j++;
+                        consumed++;
+                    }
+                    buf[pos++] = (char)value;
+                } else {
+                    buf[pos++] = esc;
+                }
+            } else {
+                buf[pos++] = ch;
+            }
+        }
+        if (i + 1 < c->argc && pos + 1 < alloc) buf[pos++] = ' ';
+    }
+    buf[pos] = '\0';
+    if (pos > 0) {
+        int has_color = 0;
+        for (size_t i = 0; i + 1 < pos; i++) { if (buf[i] == '<' && buf[i+1] == '(') { has_color = 1; break; } }
+        if (has_color) kprint_colorized(buf);
+        else kprint((uint8_t*)buf);
+    }
+    kfree(buf);
+    return 0;
+}
 
 static int bi_ls(cmd_ctx *c) {
     char path[256]; if (c->argc<2) resolve_path(g_cwd, "", path, sizeof(path)); else resolve_path(g_cwd, c->argv[1], path, sizeof(path));
@@ -999,17 +1227,17 @@ static int bi_about(cmd_ctx *c) {
     return 0;
     }
 
-static int bi_time(cmd_ctx *c) { rtc_datetime_t dt; rtc_read_datetime(&dt); char out[16]; int pos=0;
-    int hh=dt.hour, mm=dt.minute, ss=dt.second;
-    out[pos++] = (char)('0' + (hh/10)); out[pos++] = (char)('0' + (hh%10)); out[pos++] = ':';
-    out[pos++] = (char)('0' + (mm/10)); out[pos++] = (char)('0' + (mm%10)); out[pos++] = ':';
-    out[pos++] = (char)('0' + (ss/10)); out[pos++] = (char)('0' + (ss%10)); out[pos++]='\n'; out[pos]='\0';
-    osh_write(c->out,c->out_len,c->out_cap,out); return 0; }
+    static int bi_time(cmd_ctx *c) { rtc_datetime_t dt; rtc_read_datetime(&dt); char out[16]; int pos=0;
+        int hh=dt.hour, mm=dt.minute, ss=dt.second;
+        out[pos++] = (char)('0' + (hh/10)); out[pos++] = (char)('0' + (hh%10)); out[pos++] = ':';
+        out[pos++] = (char)('0' + (mm/10)); out[pos++] = (char)('0' + (mm%10)); out[pos++] = ':';
+    out[pos++] = (char)('0' + (ss/10)); out[pos++] = (char)('0' + (ss%10)); out[pos]='\0';
+    kprint((uint8_t*)out); return 0; }
 
-static int bi_date(cmd_ctx *c) { rtc_datetime_t dt; rtc_read_datetime(&dt); char out[64]; int pos=0; int d=dt.day,m=dt.month,y=dt.year; out[pos++]='0'+d/10; out[pos++]='0'+d%10; out[pos++]='/'; out[pos++]='0'+m/10; out[pos++]='0'+m%10; out[pos++]='/'; // year simplified
-    // year 4 digits
-    int yy = y; char tmp[8]; int n=0; if (yy==0){tmp[n++]='0';} else { int s[8],k=0; while(yy){ s[k++]=yy%10; yy/=10; } for(int i=k-1;i>=0;i--) tmp[n++]=(char)('0'+s[i]); }
-    for (int i=0;i<n;i++) out[pos++]=tmp[i]; out[pos++]='\n'; out[pos]='\0'; osh_write(c->out,c->out_len,c->out_cap,out); return 0; }
+        static int bi_date(cmd_ctx *c) { rtc_datetime_t dt; rtc_read_datetime(&dt); char out[64]; int pos=0; int d=dt.day,m=dt.month,y=dt.year; out[pos++]='0'+d/10; out[pos++]='0'+d%10; out[pos++]='/'; out[pos++]='0'+m/10; out[pos++]='0'+m%10; out[pos++]='/'; // year simplified
+            // year 4 digits
+            int yy = y; char tmp[8]; int n=0; if (yy==0){tmp[n++]='0';} else { int s[8],k=0; while(yy){ s[k++]=yy%10; yy/=10; } for(int i=k-1;i>=0;i--) tmp[n++]=(char)('0'+s[i]); }
+    for (int i=0;i<n;i++) out[pos++]=tmp[i]; out[pos]='\0'; kprint((uint8_t*)out); return 0; }
 
 static int bi_uptime(cmd_ctx *c) { uint64_t seconds = rtc_ticks / 2; uint64_t minutes = seconds / 60; uint64_t hours = minutes / 60; seconds%=60; minutes%=60; char out[64]; int pos=0; // Hh Mm Ss
     int h=(int)hours,m=(int)minutes,s=(int)seconds; char buf[32]; int n=0; // naive int to str
@@ -1053,7 +1281,7 @@ static int bi_mem(cmd_ctx *c){
 
 // Run script file: osh <script>
 static int bi_osh(cmd_ctx *c) {
-    if (c->argc < 2) { osh_write(c->out, c->out_len, c->out_cap, "usage: osh <script>\n"); return 1; }
+    if (c->argc < 2) { osh_run(); return 0; }
     // Use the same path join logic as cat/ls to avoid intermittent resolution issues
     char path[256]; join_cwd(g_cwd, c->argv[1], path, sizeof(path));
     struct fs_file *f = fs_open(path); if (!f) { osh_write(c->out, c->out_len, c->out_cap, "osh: cannot open script\n"); return 1; }
@@ -1148,15 +1376,19 @@ static int bi_osh(cmd_ctx *c) {
     // Execute using top-level script engine
     osh_script_ctx CTX = { .lines = lines, .nlines = nlines, .funcs = funcs, .nfuncs = nfuncs };
     {
+        osh_script_ctx* prev_ctx = g_active_script_ctx;
+        g_active_script_ctx = &CTX;
         g_script_depth++;
         int status = osh_exec_range(&CTX, 0, nlines);
         g_script_depth--;
+        g_active_script_ctx = prev_ctx;
         for (int j=0;j<nfuncs;j++){ for(int k=0;k<funcs[j].pc;k++) if(funcs[j].params[k]) kfree(funcs[j].params[k]); }
         kfree(lines); kfree(line_len); kfree(buf);
         if (status == OSH_SCRIPT_EXIT) status = 0;
         if (status == OSH_SCRIPT_ABORT) {
             status = 130;
         }
+        if (status == OSH_SCRIPT_RETURN) status = 0;
         return status;
     }
 
@@ -1355,33 +1587,36 @@ static int bi_chipset(cmd_ctx *c) {
 
 static int bi_help(cmd_ctx *c) {
     (void)c;
-    kprint("OSH v0.1 (axosh)\n");
-    kprint("Available commands:\n");
-    kprint("help - show available commands\n");
-    kprint("clear, cls - clear the screen\n");
-    kprint("reboot - reboot the system\n");
-    kprint("shutdown - shutdown the system\n");
-    kprint("echo <text> - print text\n");
-    kprint("snake - run the snake game\n");
-    kprint("tetris - run the tetris game\n");
-    kprint("clock - run the analog clock\n");
-    kprint("time - show current time from RTC\n");
-    kprint("date - show current date from RTC\n");
-    kprint("uptime - show system uptime based on RTC ticks\n");
-    kprint("about - show information about authors and system\n");
-    kprint("ls - list directory contents\n");
-    kprint("cat - print file contents\n");
-    kprint("mkdir - create a directory\n");
-    kprint("touch - create an empty file\n");
-    kprint("rm - remove a file\n");
-    kprint("edit - edit a file\n");
-    kprint("pause - pause the shell and wait for a key press\n");
-    kprint("chipset info - print chipset information\n");
-    kprint("chipset reset - reset chipset\n");
-    kprint("neofetch - show system information\n");
-    kprint("osh - run a script file\n");
-    kprint("art - show ASCII art\n");
-    kprint("exit - exit the shell\n");
+    kprint((uint8_t*)"OSH v0.2 (axosh)\n");
+    kprint((uint8_t*)"Available commands:\n");
+    kprint((uint8_t*)"help - show available commands\n");
+    kprint((uint8_t*)"clear, cls - clear the screen\n");
+    kprint((uint8_t*)"kprint <text> - print raw text without auto-newline\n");
+    kprint((uint8_t*)"readline [prompt] - read a line from the user\n");
+    kprint((uint8_t*)"readkey - read a single keypress (hex for non-printable)\n");
+    kprint((uint8_t*)"reboot - reboot the system\n");
+    kprint((uint8_t*)"shutdown - shutdown the system\n");
+    kprint((uint8_t*)"echo <text> - print text\n");
+    kprint((uint8_t*)"snake - run the snake game\n");
+    kprint((uint8_t*)"tetris - run the tetris game\n");
+    kprint((uint8_t*)"clock - run the analog clock\n");
+    kprint((uint8_t*)"time - show current time from RTC\n");
+    kprint((uint8_t*)"date - show current date from RTC\n");
+    kprint((uint8_t*)"uptime - show system uptime based on RTC ticks\n");
+    kprint((uint8_t*)"about - show information about authors and system\n");
+    kprint((uint8_t*)"ls - list directory contents\n");
+    kprint((uint8_t*)"cat - print file contents\n");
+    kprint((uint8_t*)"mkdir - create a directory\n");
+    kprint((uint8_t*)"touch - create an empty file\n");
+    kprint((uint8_t*)"rm - remove a file\n");
+    kprint((uint8_t*)"edit - edit a file\n");
+    kprint((uint8_t*)"pause - pause the shell and wait for a key press\n");
+    kprint((uint8_t*)"chipset info - print chipset information\n");
+    kprint((uint8_t*)"chipset reset - reset chipset\n");
+    kprint((uint8_t*)"neofetch - show system information\n");
+    kprint((uint8_t*)"osh - run a script file\n");
+    kprint((uint8_t*)"art - show ASCII art\n");
+    kprint((uint8_t*)"exit - exit the shell\n");
     return 0;
 }
 
@@ -1390,7 +1625,8 @@ static int bi_art(cmd_ctx *c){ (void)c; ascii_art(); return 0; }
 typedef int (*builtin_fn)(cmd_ctx*);
 typedef struct { const char* name; builtin_fn fn; } builtin;
 static const builtin builtin_table[] = {
-    {"echo", bi_echo}, {"pwd", bi_pwd}, {"cd", bi_cd}, {"clear", bi_cls}, {"cls", bi_cls},
+    {"echo", bi_echo}, {"kprint", bi_kprint}, {"readline", bi_readline}, {"readkey", bi_readkey},
+    {"pwd", bi_pwd}, {"cd", bi_cd}, {"clear", bi_cls}, {"cls", bi_cls},
     {"ls", bi_ls}, {"cat", bi_cat}, {"mkdir", bi_mkdir}, {"touch", bi_touch}, {"rm", bi_rm},
     {"about", bi_about}, {"time", bi_time}, {"date", bi_date}, {"uptime", bi_uptime},
     {"edit", bi_edit}, {"snake", bi_snake}, {"tetris", bi_tetris}, {"clock", bi_clock},
@@ -1412,6 +1648,20 @@ int osh_get_builtin_names(const char*** out_names) {
     return (int)n;
 }
 
+static int osh_assign_value(const char* name, char* rhs) {
+    if (!name || !rhs) return 1;
+    char* value = NULL;
+    int rc = osh_eval_rhs(rhs, &value);
+    if (rc == OSH_SCRIPT_ABORT || rc == OSH_SCRIPT_EXIT || rc == OSH_SCRIPT_RETURN) {
+        if (value) kfree(value);
+        return rc;
+    }
+    if (!value) value = (char*)kcalloc(1,1);
+    var_set(name, value);
+    kfree(value);
+    return 0;
+}
+
 // -------- executor --------
 static int exec_simple(char **argv, int argc, const char *in, char **out, size_t *out_len, size_t *out_cap) {
     if (argc==0) return 0;
@@ -1424,69 +1674,37 @@ static int exec_simple(char **argv, int argc, const char *in, char **out, size_t
             if (i>2) rhs[pos++] = ' ';
             memcpy(rhs+pos, argv[i], L); pos += L; rhs[pos]='\0';
         }
-        // special: %(readline)
-        if (strcmp(rhs, "%(readline)") == 0) {
-            char cwd[256]; osh_get_cwd(cwd, sizeof(cwd));
-            char linebuf[512]; int n = osh_line_read("", cwd, linebuf, (int)sizeof(linebuf));
-            if (n < 0) {
-                if (osh_line_was_ctrlc()) return OSH_SCRIPT_ABORT;
-                linebuf[0]='\0';
-            } else {
-                linebuf[n]='\0';
-            }
-            var_set(argv[0], linebuf);
-            return 0;
-        }
-        // detect arithmetic expression (optionally after expanding $vars)
-        char *rhs_exp = expand_vars(rhs); const char* R = rhs_exp ? rhs_exp : rhs;
-        int arith=1; for (const char* q=R; *q; q++) { char c=*q; if (!(c==' '||c=='\t'||c=='+'||c=='-'||c=='*'||c=='/'||c=='('||c==')'||c=='.'||(c>='0'&&c<='9'))) { arith=0; break; } }
-        if (arith) {
-            const char* s = R;
-            double val = osh_parse_expr(&s);
-            char buf[64]; osh_double_to_str(val, buf, sizeof(buf));
-            var_set(argv[0], buf);
-            if (rhs_exp) kfree(rhs_exp);
-            return 0;
-        } else {
-            var_set(argv[0], R);
-            if (rhs_exp) kfree(rhs_exp);
-            return 0;
-        }
-    } else if (argc == 1) {
-        // compact form: name=rhs
-        char* eq = NULL; for (char* p=argv[0]; *p; p++) if (*p=='='){ eq=p; break; }
+        return osh_assign_value(argv[0], rhs);
+    } else if (argc >= 1) {
+        // compact form: name=rhs (possibly with extra tokens on RHS)
+        char* eq = NULL;
+        for (char* p=argv[0]; *p; p++) if (*p=='='){ eq=p; break; }
         if (eq) {
-            *eq = '\0'; const char* name = argv[0]; const char* R = eq+1;
+            *eq = '\0';
+            const char* name = argv[0];
+            const char* first_rhs = eq + 1;
             if (is_valid_varname(name)) {
-                if (strcmp(R, "%(readline)") == 0) {
-                    char cwd[256]; osh_get_cwd(cwd, sizeof(cwd));
-                    char linebuf[512]; int n = osh_line_read("", cwd, linebuf, (int)sizeof(linebuf));
-                    if (n < 0) {
-                        if (osh_line_was_ctrlc()) return OSH_SCRIPT_ABORT;
-                        linebuf[0]='\0';
-                    } else {
-                        linebuf[n]='\0';
-                    }
-                    var_set(name, linebuf);
-                    return 0;
+                char rhs_buf[512]; size_t pos = 0;
+                if (first_rhs && *first_rhs) {
+                    size_t L = strlen(first_rhs);
+                    if (L > sizeof(rhs_buf) - 1) L = sizeof(rhs_buf) - 1;
+                    memcpy(rhs_buf, first_rhs, L);
+                    pos = L;
                 }
-                char *rhs_exp = expand_vars(R); const char* RS = rhs_exp ? rhs_exp : R;
-                int arith=1; for (const char* q=RS; *q; q++) { char c=*q; if (!(c==' '||c=='\t'||c=='+'||c=='-'||c=='*'||c=='/'||c=='('||c==')'||c=='.'||(c>='0'&&c<='9'))) { arith=0; break; } }
-                if (arith) {
-                    const char* s = RS;
-                    double val = osh_parse_expr(&s);
-                    char buf[64]; osh_double_to_str(val, buf, sizeof(buf));
-                    var_set(name, buf);
-                    if (rhs_exp) kfree(rhs_exp);
-                    return 0;
-                } else {
-                    var_set(name, RS);
-                    if (rhs_exp) kfree(rhs_exp);
-                    return 0;
+                for (int i = 1; i < argc && pos < sizeof(rhs_buf) - 1; i++) {
+                    const char* tok = argv[i];
+                    if (!tok || !*tok) continue;
+                    if (pos > 0 && pos < sizeof(rhs_buf) - 1) rhs_buf[pos++] = ' ';
+                    size_t L = strlen(tok);
+                    if (L > sizeof(rhs_buf) - 1 - pos) L = sizeof(rhs_buf) - 1 - pos;
+                    if (L > 0) { memcpy(rhs_buf + pos, tok, L); pos += L; }
                 }
-            } else {
-                *eq = '='; // restore and fallthrough to normal exec
+                rhs_buf[pos] = '\0';
+                int rc = osh_assign_value(name, rhs_buf);
+                *eq = '=';
+                return rc;
             }
+            *eq = '='; // restore and fallthrough to normal exec
         }
     }
     if (strcmp(argv[0], "exit") == 0) {
@@ -1549,6 +1767,11 @@ static int exec_pipeline(token *toks, int l, int r, const char *stdin_data, char
             if (cur_out) kfree(cur_out);
             return OSH_SCRIPT_ABORT;
         }
+        if (rc == OSH_SCRIPT_RETURN) {
+            if (stage_out) kfree(stage_out);
+            if (cur_out) kfree(cur_out);
+            return OSH_SCRIPT_RETURN;
+        }
         // Next stage input becomes this output
         stage_in = stage_out; stage_in_len = stage_out_len;
         if (pi+2 >= parts_count) { cur_out = stage_out; cur_len = stage_out_len; cur_cap = stage_out_cap; }
@@ -1581,7 +1804,334 @@ static int exec_pipeline(token *toks, int l, int r, const char *stdin_data, char
     return 0;
 }
 
-static int exec_line(const char *line) {
+static int osh_exec_subcommand(const char* line, char **out_value) {
+    if (out_value) *out_value = NULL;
+    if (!line) {
+        if (out_value) {
+            char* empty = (char*)kcalloc(1,1);
+            if (!empty) return 1;
+            *out_value = empty;
+        }
+        return 0;
+    }
+    int tn = 0;
+    token *t = lex(line, &tn);
+    if (!t) return 1;
+    if (tn == 0) {
+        free_tokens(t, tn);
+        if (out_value) {
+            char* empty = (char*)kcalloc(1,1);
+            if (!empty) *out_value = empty; else return 1;
+        }
+        return 0;
+    }
+    char *out = NULL; size_t out_len = 0, out_cap = 0;
+    int rc = exec_pipeline(t, 0, tn, NULL, &out, &out_len, &out_cap);
+    free_tokens(t, tn);
+    if (rc == 2 || rc == OSH_SCRIPT_EXIT || rc == OSH_SCRIPT_ABORT || rc == OSH_SCRIPT_RETURN) {
+        if (out) kfree(out);
+        return rc;
+    }
+    if (out_value) {
+        if (out) {
+            size_t len = strlen(out);
+            while (len > 0 && (out[len-1] == '\n' || out[len-1] == '\r')) out[--len] = '\0';
+            *out_value = out;
+            out = NULL;
+        } else {
+            char* empty = (char*)kcalloc(1,1);
+            if (!empty) *out_value = empty; else return rc ? rc : 1;
+        }
+    }
+    if (out) kfree(out);
+    return rc;
+}
+
+static int osh_eval_command_subst(char* expr_buf, int* handled, char** out_value) {
+    if (handled) *handled = 0;
+    if (out_value) *out_value = NULL;
+    if (!expr_buf) return 0;
+    trim_spaces(expr_buf);
+    size_t len = strlen(expr_buf);
+    if (len < 3 || expr_buf[0] != '%' || expr_buf[1] != '(' || expr_buf[len-1] != ')') {
+        return 0;
+    }
+    expr_buf[len-1] = '\0';
+    char* inner = expr_buf + 2;
+    trim_spaces(inner);
+    if (handled) *handled = 1;
+    char *subst_val = NULL;
+    int rc = osh_exec_subcommand(inner, &subst_val);
+    if (rc == OSH_SCRIPT_ABORT || rc == OSH_SCRIPT_EXIT || rc == OSH_SCRIPT_RETURN) {
+        if (subst_val) kfree(subst_val);
+        return rc;
+    }
+    if (!subst_val) subst_val = (char*)kcalloc(1,1);
+    if (out_value) *out_value = subst_val;
+    else if (subst_val) kfree(subst_val);
+    return rc;
+}
+
+static int osh_eval_function_call(char* expr_buf, int* handled, char** out_value) {
+    if (keyboard_ctrlc_pending()) { keyboard_consume_ctrlc(); return OSH_SCRIPT_ABORT; }
+    if (handled) *handled = 0;
+    if (out_value) *out_value = NULL;
+    if (!expr_buf || !g_active_script_ctx) return 0;
+    trim_spaces(expr_buf);
+    if (!*expr_buf) return 0;
+    char *p = expr_buf;
+    char fname[32]; int ni = 0;
+    if (!is_var_name_char1(*p)) return 0;
+    while (*p && is_var_name_char(*p) && ni < (int)sizeof(fname)-1) {
+        fname[ni++] = *p++;
+    }
+    fname[ni] = '\0';
+    if (ni == 0) return 0;
+    while (*p==' '||*p=='\t') p++;
+    if (*p != '(') return 0;
+    p++; // skip '('
+    char* args[8] = {0}; int ac = 0;
+    char* token_buf = (char*)kcalloc(1, 512);
+    if (!token_buf) return 0;
+    int ti = 0;
+    int depth = 1;
+    int inq = 0;
+    char quote = 0;
+    while (*p && depth > 0) {
+        char ch = *p;
+        if (inq) {
+            if (ch == quote) inq = 0;
+        } else {
+            if (ch == '"' || ch=='\'') { inq = 1; quote = ch; }
+            else if (ch == '(') { depth++; }
+            else if (ch == ')') {
+                depth--;
+                if (depth == 0) {
+                    token_buf[ti] = '\0';
+                    char* trimmed = osh_dup_trim(token_buf);
+                    if (!trimmed) trimmed = (char*)kcalloc(1,1);
+                    if (ac < 8) args[ac++] = trimmed; else kfree(trimmed);
+                    ti = 0;
+                    break;
+                }
+            } else if (ch == ',' && depth == 1) {
+                token_buf[ti] = '\0';
+                char* trimmed = osh_dup_trim(token_buf);
+                if (!trimmed) trimmed = (char*)kcalloc(1,1);
+                if (ac < 8) args[ac++] = trimmed; else kfree(trimmed);
+                ti = 0;
+                p++;
+                continue;
+            }
+        }
+        if (depth > 0) {
+            if (ti < 511) token_buf[ti++] = ch;
+        }
+        p++;
+    }
+    kfree(token_buf);
+    if (depth != 0) {
+        for (int i=0;i<ac;i++) if (args[i]) kfree(args[i]);
+        return 0;
+    }
+    while (*p==' '||*p=='\t') p++;
+    if (*p != '\0') {
+        for (int i=0;i<ac;i++) if (args[i]) kfree(args[i]);
+        return 0;
+    }
+    int fi = osh_find_func(g_active_script_ctx, fname);
+    if (fi < 0) {
+        for (int i=0;i<ac;i++) if (args[i]) kfree(args[i]);
+        return 0;
+    }
+    char* ret_val = NULL;
+    if (handled) *handled = 1;
+    int rc = osh_call_func(g_active_script_ctx, fi, args, ac, &ret_val);
+    for (int i=0;i<ac;i++) if (args[i]) kfree(args[i]);
+    if (rc == OSH_SCRIPT_ABORT || rc == OSH_SCRIPT_EXIT) {
+        if (ret_val) kfree(ret_val);
+        return rc;
+    }
+    if (!ret_val) ret_val = (char*)kcalloc(1,1);
+    if (out_value) *out_value = ret_val;
+    else if (ret_val) kfree(ret_val);
+    return rc;
+}
+
+static int osh_eval_rhs(char* rhs, char** out_value) {
+    if (out_value) *out_value = NULL;
+    if (!rhs) return 1;
+    trim_spaces(rhs);
+    if (!*rhs) {
+        if (out_value) *out_value = (char*)kcalloc(1,1);
+        return 0;
+    }
+    if (keyboard_ctrlc_pending()) { keyboard_consume_ctrlc(); return OSH_SCRIPT_ABORT; }
+    int handled = 0;
+    char* val = NULL;
+    int rc = osh_eval_command_subst(rhs, &handled, &val);
+    if (handled) {
+        if (out_value) *out_value = val;
+        else if (val) kfree(val);
+        return rc;
+    }
+    handled = 0;
+    rc = osh_eval_function_call(rhs, &handled, &val);
+    if (handled) {
+        if (out_value) *out_value = val;
+        else if (val) kfree(val);
+        return rc;
+    }
+    // Replace any inline function calls within arithmetic expressions
+    // Example: "fib(10) + fib(9)" -> evaluate sub-calls to numbers first
+    if (g_active_script_ctx) {
+        // Try at most 64 substitutions to avoid infinite loops
+        for (int pass = 0; pass < 64; pass++) {
+            if (keyboard_ctrlc_pending()) { keyboard_consume_ctrlc(); return OSH_SCRIPT_ABORT; }
+            const char* p = rhs;
+            // find identifier followed by '(' and matching ')'
+            int found = 0;
+            const char* start = NULL;
+            const char* end = NULL;
+            // scan for name(
+            for (; *p; p++) {
+                if (is_var_name_char1(*p)) {
+                    const char* q = p + 1;
+                    while (*q && is_var_name_char(*q)) q++;
+                    while (*q==' '||*q=='\t') q++;
+                    if (*q == '(') {
+                        // find matching ')'
+                        int depth = 1; const char* r = q + 1;
+                        int inq = 0; char quote = 0;
+                        while (*r) {
+                            char ch = *r;
+                            if (inq) { if (ch == quote) inq = 0; r++; continue; }
+                            if (ch=='"' || ch=='\'') { inq=1; quote=ch; r++; continue; }
+                            if (ch=='(') depth++;
+                            else if (ch==')') { depth--; if (depth==0) { end = r; break; } }
+                            r++;
+                        }
+                        if (end) { start = p; found = 1; break; }
+                    }
+                }
+            }
+            if (!found) break;
+            // build substring [start, end] inclusive, then evaluate as a single call
+            size_t sub_len = (size_t)(end - start + 1);
+            char* sub = (char*)kcalloc(sub_len + 1, 1);
+            if (!sub) break;
+            memcpy(sub, start, sub_len); sub[sub_len] = '\0';
+            int h = 0; char* sub_val = NULL;
+            int rc2 = osh_eval_function_call(sub, &h, &sub_val);
+            kfree(sub);
+            if (rc2 == OSH_SCRIPT_ABORT || rc2 == OSH_SCRIPT_EXIT || rc2 == OSH_SCRIPT_RETURN) {
+                if (sub_val) kfree(sub_val);
+                return rc2;
+            }
+            if (!h) { if (sub_val) kfree(sub_val); break; }
+            if (!sub_val) sub_val = (char*)kcalloc(1,1);
+            // splice back: prefix + sub_val + suffix into a new rhs buffer
+            size_t prefix_len = (size_t)(start - rhs);
+            size_t suffix_len = strlen(end + 1);
+            size_t sv_len = strlen(sub_val);
+            size_t ncap = prefix_len + sv_len + suffix_len + 1;
+            char* nb = (char*)kcalloc(ncap, 1);
+            if (!nb) { kfree(sub_val); break; }
+            if (prefix_len) memcpy(nb, rhs, prefix_len);
+            if (sv_len) memcpy(nb + prefix_len, sub_val, sv_len);
+            if (suffix_len) memcpy(nb + prefix_len + sv_len, end + 1, suffix_len);
+            nb[prefix_len + sv_len + suffix_len] = '\0';
+            kfree(sub_val);
+            // replace rhs contents in-place (caller provided modifiable buffer)
+            size_t nb_len = strlen(nb);
+            size_t rhs_cap = strlen(rhs); // best effort: assume buffer is large; if not, reallocate
+            // safer: reallocate
+            char* repl = (char*)kcalloc(nb_len + 1, 1);
+            if (repl) {
+                memcpy(repl, nb, nb_len + 1);
+                // swap pointers
+                // free old rhs only if it was heap-allocated by us; we cannot know, so copy back
+                // to existing buffer up to its size; since osh_eval_rhs callers pass local arrays
+                // sized reasonably (512), this copy is safe within their limits.
+                // Copy back with truncation protection
+                size_t maxcpy = nb_len;
+                // assume rhs buffer is at least 512; keep conservative 511
+                if (maxcpy > 511) maxcpy = 511;
+                memcpy(rhs, repl, maxcpy);
+                rhs[maxcpy] = '\0';
+                kfree(repl);
+            } else {
+                // fallback: copy into rhs directly
+                size_t maxcpy = nb_len;
+                if (maxcpy > 511) maxcpy = 511;
+                memcpy(rhs, nb, maxcpy);
+                rhs[maxcpy] = '\0';
+            }
+            kfree(nb);
+        }
+    }
+    char *rhs_exp = expand_vars(rhs);
+    const char* R0 = rhs_exp ? rhs_exp : rhs;
+    char *rhs_ident = osh_expand_idents(R0);
+    const char* R = rhs_ident ? rhs_ident : R0;
+    int arith = 1;
+    int has_op = 0;
+    for (const char* q = R; *q; q++) {
+        char c = *q;
+        if (c=='+'||c=='-'||c=='*'||c=='/'||c=='('||c==')') has_op = 1;
+        if (!(c==' '||c=='\t'||c=='+'||c=='-'||c=='*'||c=='/'||c=='('||c==')'||c=='.'||(c>='0'&&c<='9'))) {
+            arith = 0;
+            break;
+        }
+    }
+    if (!has_op) arith = 0;
+    if (arith && *R) {
+        const char* s = R;
+        double valnum = osh_parse_expr(&s);
+        char buf[64];
+        osh_double_to_str(valnum, buf, sizeof(buf));
+        size_t blen = strlen(buf);
+        char* out = (char*)kcalloc(blen + 1, 1);
+        if (out) memcpy(out, buf, blen + 1);
+        if (out_value) *out_value = out;
+        if (rhs_ident) kfree(rhs_ident);
+        if (rhs_exp) kfree(rhs_exp);
+        return 0;
+    }
+    const char* final_src = rhs_ident ? rhs_ident : R0;
+    size_t flen = strlen(final_src);
+    char* out = (char*)kcalloc(flen + 1, 1);
+    if (out && flen) memcpy(out, final_src, flen + 1);
+    if (!out) out = (char*)kcalloc(1,1);
+    strip_matching_quotes(out);
+    if (out_value) *out_value = out;
+    if (rhs_ident) kfree(rhs_ident);
+    if (rhs_exp) kfree(rhs_exp);
+    return 0;
+}
+
+int exec_line(const char *line) {
+    if (!line) return 0;
+    const char* lp = line;
+    while (*lp==' '||*lp=='\t') lp++;
+    if (g_script_depth > 0 && strncmp(lp, "return", 6) == 0 && (lp[6]==' '||lp[6]=='\t'||lp[6]=='\0')) {
+        lp += 6;
+        while (*lp==' '||*lp=='\t') lp++;
+        char* expr = osh_dup_trim(lp);
+        if (!expr) expr = (char*)kcalloc(1,1);
+        char* value = NULL;
+        int rc_eval = osh_eval_rhs(expr, &value);
+        if (expr) kfree(expr);
+        if (rc_eval == OSH_SCRIPT_ABORT || rc_eval == OSH_SCRIPT_EXIT) {
+            if (value) kfree(value);
+            return rc_eval;
+        }
+        if (!value) value = (char*)kcalloc(1,1);
+        if (g_script_return_value) { kfree(g_script_return_value); g_script_return_value = NULL; }
+        g_script_return_value = value;
+        g_script_return_pending = 1;
+        return OSH_SCRIPT_RETURN;
+    }
     int tn=0; token *t = lex(line, &tn); if (tn==0) { if (t) kfree(t); return 0; }
     int i=0; int status=0; // 0 success, non-zero fail; exit=2
     while (i < tn) {
@@ -1593,6 +2143,7 @@ static int exec_line(const char *line) {
         if (rc == 2) { free_tokens(t, tn); if (out) kfree(out); return 2; }
         if (rc == OSH_SCRIPT_EXIT) { free_tokens(t, tn); if (out) kfree(out); return OSH_SCRIPT_EXIT; }
         if (rc == OSH_SCRIPT_ABORT) { free_tokens(t, tn); if (out) kfree(out); return OSH_SCRIPT_ABORT; }
+        if (rc == OSH_SCRIPT_RETURN) { free_tokens(t, tn); if (out) kfree(out); return OSH_SCRIPT_RETURN; }
         status = rc;
         // print to screen if there is output (and not redirected)
         if (out && out_len > 0) {
@@ -1640,15 +2191,57 @@ static void bg_thread_entry(void) {
 }
 
 // -------- public loop --------
+static void build_prompt(char* out, size_t outsz) {
+    if (!out || outsz == 0) return;
+    out[0] = '\0';
+    const char* ps1 = var_get("PS1");
+    if (ps1 && ps1[0]) {
+        char* exp = expand_vars(ps1);
+        const char* s = exp ? exp : ps1;
+        size_t pos = 0;
+        for (const char* p = s; *p && pos < outsz - 1; p++) {
+            if (*p == '\\') {
+                p++;
+                if (!*p) break;
+                char c = *p;
+                if (c == 'n') { out[pos++] = '\n'; }
+                else if (c == 'w') {
+                    size_t L = strlen(g_cwd);
+                    if (L > outsz - 1 - pos) L = outsz - 1 - pos;
+                    if (L) { memcpy(out + pos, g_cwd, L); pos += L; }
+                } else if (c == 'W') {
+                    const char* base = g_cwd;
+                    const char* last = NULL;
+                    for (const char* q = g_cwd; *q; q++) if (*q == '/') last = q;
+                    if (last) base = (*(last+1)) ? (last+1) : last;
+                    size_t L = strlen(base);
+                    if (L > outsz - 1 - pos) L = outsz - 1 - pos;
+                    if (L) { memcpy(out + pos, base, L); pos += L; }
+                } else if (c == '\\') { out[pos++] = '\\'; }
+                else if (c == '$') { out[pos++] = '$'; }
+                else { out[pos++] = c; }
+            } else {
+                out[pos++] = *p;
+            }
+        }
+        out[pos] = '\0';
+        if (exp) kfree(exp);
+        if (out[0]) return;
+    }
+    // default prompt: "<cwd> > "
+    strncpy(out, g_cwd, outsz > 3 ? outsz - 3 : outsz - 1);
+    out[outsz - 1] = '\0';
+    size_t cur = strlen(out);
+    if (cur + 2 < outsz) { out[cur++] = '>'; out[cur++] = ' '; out[cur] = '\0'; }
+}
+
 void osh_run(void) {
+    kprintf("%s v%s (%s)\n", OSH_NAME, OSH_VERSION, OSH_FULL_NAME);
     static char buf[512];
     osh_history_init();
     for (;;) {
         /* приглашение osh + строковый редактор */
-        char prompt[128]; prompt[0]='\0';
-        // показать cwd в приглашении
-        strncpy(prompt, g_cwd, sizeof(prompt)-3); prompt[sizeof(prompt)-3]='\0';
-        strncat(prompt, "> ", sizeof(prompt)-1 - strlen(prompt));
+        char prompt[128]; build_prompt(prompt, sizeof(prompt));
         int n = osh_line_read(prompt, g_cwd, buf, (int)sizeof(buf));
         if (n < 0) continue;
         char *line = buf;

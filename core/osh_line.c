@@ -2,11 +2,11 @@
 #include "../inc/vga.h"
 #include "../inc/keyboard.h"
 #include "../inc/fs.h"
-#include "../inc/string.h"
 #include "../inc/ext2.h"
 #include "../inc/heap.h"
 #include "../inc/axosh.h"
 #include <stdint.h>
+#include <string.h>
 
 #define OSH_MAX_HISTORY 32
 #define OSH_MAX_LINE 512
@@ -35,29 +35,109 @@ void osh_history_add(const char* line) {
 }
 
 // helpers
+#define OSH_PROMPT_CACHE (OSH_MAX_LINE)
+
+static uint32_t measure_colorized_visible(const char* s) {
+    if (!s) return 0;
+    uint32_t vis = 0;
+    const char* p = s;
+    while (*p) {
+        size_t ahead = strnlen(p, 6);
+        if (ahead >= 6 && p[0]=='<' && p[1]=='(' && p[4]==')' && p[5]=='>') { p += 6; continue; }
+        vis++; p++;
+    }
+    return vis;
+}
+
 static void redraw_line_xy(uint32_t sx, uint32_t sy, const char* prompt, const char* buf, int len, int cur, const char* sugg, int sugg_len) {
-    // перерисовать строку в текущем месте курсора
-    // очистим строку справа от начала промпта
-    for (uint32_t x = sx; x < MAX_COLS; x++) vga_putch_xy(x, sy, ' ', GRAY_ON_BLACK);
-    vga_write_str_xy(sx, sy, prompt, GRAY_ON_BLACK);
-    uint32_t px = (uint32_t)(sx + strlen(prompt));
-    vga_write_str_xy(px, sy, buf, GRAY_ON_BLACK);
-    // рисуем подсказки на той же строке после введённого текста
-    if (sugg && sugg_len > 0) {
-        uint32_t start = px + (uint32_t)len + 1;
-        for (uint32_t x = start; x < MAX_COLS; x++) vga_putch_xy(x, sy, ' ', GRAY_ON_BLACK);
-        // выводим, пока помещается
-        for (int i=0; i<sugg_len && (start + (uint32_t)i) < MAX_COLS; i++) {
-            vga_putch_xy(start + (uint32_t)i, sy, (uint8_t)sugg[i], GRAY_ON_BLACK);
+    uint32_t prompt_len = measure_colorized_visible(prompt);
+    uint32_t px = sx + prompt_len;
+
+    static uint32_t last_sy = 0xFFFFFFFFu;
+    static uint32_t last_sx = 0;
+    static uint32_t last_prompt_len = 0;
+    static uint32_t last_buf_len = 0;
+    static uint32_t last_sugg_start = 0;
+    static uint32_t last_sugg_len = 0;
+    static char last_prompt[OSH_PROMPT_CACHE];
+
+    int need_full = 0;
+    if (sy != last_sy || sx != last_sx) need_full = 1;
+    else if (prompt_len != last_prompt_len || strncmp(prompt, last_prompt, OSH_PROMPT_CACHE) != 0) need_full = 1;
+
+    if (px >= MAX_COLS) {
+        px = MAX_COLS;
+        need_full = 1;
+    }
+
+    if (need_full) {
+        for (uint32_t x = sx; x < MAX_COLS; x++) vga_putch_xy(x, sy, ' ', GRAY_ON_BLACK);
+        (void)vga_write_colorized_xy(sx, sy, prompt, GRAY_ON_BLACK);
+    } else {
+        if (prompt_len < last_prompt_len) {
+            uint32_t clear_from = sx + prompt_len;
+            uint32_t clear_to = sx + last_prompt_len;
+            if (clear_to > MAX_COLS) clear_to = MAX_COLS;
+            for (uint32_t x = clear_from; x < clear_to; x++) vga_putch_xy(x, sy, ' ', GRAY_ON_BLACK);
+        }
+        (void)vga_write_colorized_xy(sx, sy, prompt, GRAY_ON_BLACK);
+    }
+
+    if (px < MAX_COLS) {
+        vga_write_str_xy(px, sy, buf, GRAY_ON_BLACK);
+        if (!need_full && (uint32_t)len < last_buf_len) {
+            uint32_t clear_from = px + (uint32_t)len;
+            uint32_t clear_to = px + last_buf_len;
+            if (clear_to > MAX_COLS) clear_to = MAX_COLS;
+            for (uint32_t x = clear_from; x < clear_to; x++) vga_putch_xy(x, sy, ' ', GRAY_ON_BLACK);
         }
     }
-    // минимизируем обновления курсора
-    static uint32_t last_x = 0xFFFFFFFFu, last_y = 0xFFFFFFFFu;
-    uint32_t cx = (uint32_t)(px + cur), cy = sy;
-    if (cx != last_x || cy != last_y) {
-        vga_set_cursor(cx, cy);
-        last_x = cx; last_y = cy;
+
+    uint32_t cur_sugg_start = px + (uint32_t)len + 1;
+    if (cur_sugg_start > MAX_COLS) cur_sugg_start = MAX_COLS;
+
+    if (sugg && sugg_len > 0 && cur_sugg_start < MAX_COLS) {
+        uint32_t clear_start = cur_sugg_start;
+        uint32_t clear_end = cur_sugg_start + (uint32_t)sugg_len;
+        if (clear_end > MAX_COLS) clear_end = MAX_COLS;
+        if (last_sugg_len > 0) {
+            if (last_sugg_start < clear_start) clear_start = last_sugg_start;
+            uint32_t prev_end = last_sugg_start + last_sugg_len;
+            if (prev_end > MAX_COLS) prev_end = MAX_COLS;
+            if (prev_end > clear_end) clear_end = prev_end;
+        }
+        for (uint32_t x = clear_start; x < clear_end; x++) vga_putch_xy(x, sy, ' ', GRAY_ON_BLACK);
+        for (int i = 0; i < sugg_len && (cur_sugg_start + (uint32_t)i) < MAX_COLS; i++) {
+            vga_putch_xy(cur_sugg_start + (uint32_t)i, sy, (uint8_t)sugg[i], GRAY_ON_BLACK);
+        }
+        last_sugg_start = cur_sugg_start;
+        last_sugg_len = (uint32_t)sugg_len;
+        if (last_sugg_start + last_sugg_len > MAX_COLS) {
+            last_sugg_len = MAX_COLS - last_sugg_start;
+        }
+    } else {
+        if (last_sugg_len > 0) {
+            uint32_t clear_start = last_sugg_start;
+            uint32_t clear_end = last_sugg_start + last_sugg_len;
+            if (clear_end > MAX_COLS) clear_end = MAX_COLS;
+            for (uint32_t x = clear_start; x < clear_end; x++) vga_putch_xy(x, sy, ' ', GRAY_ON_BLACK);
+        }
+        last_sugg_len = 0;
+        last_sugg_start = cur_sugg_start;
     }
+
+    last_sy = sy;
+    last_sx = sx;
+    last_buf_len = (uint32_t)len;
+    last_prompt_len = prompt_len;
+    size_t copy_len = prompt_len;
+    if (copy_len >= OSH_PROMPT_CACHE) copy_len = OSH_PROMPT_CACHE - 1;
+    if (copy_len > 0) memcpy(last_prompt, prompt, copy_len);
+    last_prompt[copy_len] = '\0';
+
+    uint32_t cx = px + (uint32_t)cur;
+    if (cx >= MAX_COLS) cx = MAX_COLS ? MAX_COLS - 1 : 0;
+    vga_set_cursor(cx, sy);
 }
 
 static int list_dir_entries(const char* path, const char*** out_names, int* out_count) {

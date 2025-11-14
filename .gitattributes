@@ -1,0 +1,2 @@
+*.c merge=ours
+*.h merge=ours

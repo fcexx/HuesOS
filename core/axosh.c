@@ -1200,6 +1200,182 @@ static int bi_ls(cmd_ctx *c) {
     if (buf) kfree(buf); fs_file_free(f); return 0;
 }
 
+static int bi_more(cmd_ctx *c) {
+    if (c->argc < 2) { osh_write(c->out, c->out_len, c->out_cap, "more: missing file\n"); return 1; }
+    char path[256]; resolve_path(g_cwd, c->argv[1], path, sizeof(path));
+    struct fs_file *f = fs_open(path);
+    if (!f) { osh_write(c->out, c->out_len, c->out_cap, "more: cannot open\n"); return 1; }
+    size_t sz = f->size ? f->size : 0;
+    char *buf = (char*)kmalloc(sz + 1);
+    if (!buf) { fs_file_free(f); return 1; }
+    ssize_t rd = fs_read(f, buf, sz, 0);
+    fs_file_free(f);
+    if (rd < 0) { kfree(buf); return 1; }
+    buf[rd] = '\0';
+    // pager: print lines with soft-wrap to screen width
+    const int cols = MAX_COLS;
+    const int page_lines = MAX_ROWS - 1;
+    int line_on_page = 0;
+    char linebuf[128];
+    if (sizeof(linebuf) < (size_t)(cols + 2)) {
+        // safety fallback: print normally
+        kprint((uint8_t*)buf);
+        kfree(buf);
+        return 0;
+    }
+    size_t i = 0;
+    while (i < (size_t)rd) {
+        int col = 0;
+        // build one visual line up to cols or until '\n'
+        int lb = 0;
+        while (i < (size_t)rd && col < cols) {
+            char ch = buf[i++];
+            if (ch == '\r') continue;
+            if (ch == '\n') break;
+            linebuf[lb++] = ch;
+            col++;
+        }
+        linebuf[lb] = '\0';
+        kprint((uint8_t*)linebuf);
+        kprint((uint8_t*)"\n");
+        // if we broke due to newline, it's already consumed; if due to width, continue with same physical line
+        // count page line
+        line_on_page++;
+        if (line_on_page >= page_lines) {
+            kprint((uint8_t*)"-- More -- (Space=page, Enter=line, q=quit)\r");
+            char key = kgetc();
+            // clear prompt line
+            kprint((uint8_t*)"\n");
+            if (key=='q' || key==27) { break; }
+            if (key=='\n' || key=='\r') {
+                line_on_page = page_lines - 1; // advance by one line
+            } else {
+                line_on_page = 0; // next page
+            }
+        }
+        // If we ended by reaching column limit and next char is not newline, continue without consuming extra '\n'
+        if (col >= cols) {
+            continue;
+        }
+        // else we ended due to newline or EOF; continue
+    }
+    kfree(buf);
+    return 0;
+}
+
+static int parse_ipv4(const char* s, uint32_t* out_ip_be) {
+    if (!s) return 0;
+    uint32_t parts[4] = {0,0,0,0};
+    int idx = 0;
+    uint32_t val = 0;
+    int has_digit = 0;
+    for (const char* p = s; ; p++) {
+        char ch = *p;
+        if (ch >= '0' && ch <= '9') {
+            has_digit = 1;
+            val = val * 10u + (uint32_t)(ch - '0');
+            if (val > 255u) return 0;
+        } else if (ch == '.' || ch == '\0') {
+            if (!has_digit) return 0;
+            if (idx >= 4) return 0;
+            parts[idx++] = val;
+            val = 0; has_digit = 0;
+            if (ch == '\0') break;
+        } else {
+            return 0;
+        }
+    }
+    if (idx != 4) return 0;
+    *out_ip_be = (parts[0]<<24)|(parts[1]<<16)|(parts[2]<<8)|parts[3];
+    return 1;
+}
+
+static int bi_nc(cmd_ctx *c) {
+    if (c->argc < 3) { osh_write(c->out, c->out_len, c->out_cap, "usage: nc <host> <port>\n"); return 1; }
+    const char* host = c->argv[1];
+    int port = atoi(c->argv[2]);
+    if (port <= 0 || port > 65535) { osh_write(c->out, c->out_len, c->out_cap, "nc: bad port\n"); return 1; }
+    uint32_t ip = 0;
+    if (!parse_ipv4(host, &ip)) {
+        uint32_t gw = (10u<<24)|(0u<<16)|(2u<<8)|10u; // fallback DNS at gw
+        if (net_dns_query(host, gw, &ip, 5000) != 0) { osh_write(c->out, c->out_len, c->out_cap, "nc: dns failed\n"); return 1; }
+    }
+    lwip_tcp_handle_t* h = lwip_tcp_connect(ip, (uint16_t)port, 5000);
+    if (!h) { osh_write(c->out, c->out_len, c->out_cap, "closed\n"); return 1; }
+    osh_write(c->out, c->out_len, c->out_cap, "open\n");
+    lwip_tcp_close(h);
+    return 0;
+}
+
+static int bi_dbscan(cmd_ctx *c) {
+    if (c->argc < 2) { osh_write(c->out, c->out_len, c->out_cap, "usage: dbscan <host>\n"); return 1; }
+    const char* host = c->argv[1];
+    uint32_t ip = 0;
+    if (!parse_ipv4(host, &ip)) {
+        uint32_t gw = (10u<<24)|(0u<<16)|(2u<<8)|10u;
+        if (net_dns_query(host, gw, &ip, 5000) != 0) { osh_write(c->out, c->out_len, c->out_cap, "dbscan: dns failed\n"); return 1; }
+    }
+    const uint16_t ports[] = {5432, 3306, 27017, 6379, 1433, 1521, 9042, 11211};
+    kprintf("dbscan %s:\n", host);
+    for (size_t i = 0; i < sizeof(ports)/sizeof(ports[0]); i++) {
+        lwip_tcp_handle_t* h = lwip_tcp_connect(ip, ports[i], 500);
+        int open = (h != NULL);
+        kprintf(" %u: %s\n", (unsigned)ports[i], open ? "open" : "closed");
+        if (h) lwip_tcp_close(h);
+    }
+    return 0;
+}
+
+static int bi_mysql(cmd_ctx *c) {
+    if (c->argc < 2) { osh_write(c->out, c->out_len, c->out_cap, "usage: mysql <host> [port=3306]\n"); return 1; }
+    const char* host = c->argv[1];
+    int port = (c->argc >= 3) ? atoi(c->argv[2]) : 3306;
+    if (port <= 0 || port > 65535) port = 3306;
+    uint32_t ip = 0;
+    if (!parse_ipv4(host, &ip)) {
+        uint32_t gw = (10u<<24)|(0u<<16)|(2u<<8)|10u;
+        if (net_dns_query(host, gw, &ip, 5000) != 0) { osh_write(c->out, c->out_len, c->out_cap, "mysql: dns failed\n"); return 1; }
+    }
+    lwip_tcp_handle_t* h = lwip_tcp_connect(ip, (uint16_t)port, 1500);
+    if (!h) { osh_write(c->out, c->out_len, c->out_cap, "mysql: closed\n"); return 1; }
+    uint8_t buf[128];
+    int n = lwip_tcp_recv(h, buf, sizeof(buf), 1500);
+    if (n <= 0) { lwip_tcp_close(h); osh_write(c->out, c->out_len, c->out_cap, "mysql: no greeting\n"); return 1; }
+    // MySQL handshake v10: first byte 0x0A, then server version NUL-terminated
+    if ((uint8_t)buf[0] == 0x0A) {
+        char ver[96]; int vi = 0;
+        for (int i = 1; i < n && vi < (int)sizeof(ver)-1; i++) {
+            if (buf[i] == 0) break;
+            char ch = (char)buf[i];
+            if (ch >= 32 && ch < 127) ver[vi++] = ch;
+        }
+        ver[vi] = '\0';
+        kprintf("mysql: open, version=%s\n", vi ? ver : "(unknown)");
+    } else {
+        kprintf("mysql: open, proto=0x%02x (non-v10)\n", (unsigned)buf[0]);
+    }
+    lwip_tcp_close(h);
+    return 0;
+}
+
+static int bi_httpsget(cmd_ctx *c) {
+    if (c->argc < 3) {
+        osh_write(c->out, c->out_len, c->out_cap, "usage: httpsget <host> <path> [outfile]\n");
+        return 1;
+    }
+    const char* host = c->argv[1];
+    const char* path = c->argv[2];
+    const char* outfile = (c->argc >= 4) ? c->argv[3] : "/page.html";
+    int rc = https_get_to_file(host, path, outfile, 8000, 78);
+    if (rc == 0) {
+        kprintf("httpsget: OK -> %s\n", outfile);
+        return 0;
+    } else {
+        kprintf("httpsget: FAIL (%d)\n", rc);
+        return 1;
+    }
+}
+
 static int bi_cat(cmd_ctx *c) {
     if (c->argc <= 1) { if (c->in) { osh_write(c->out, c->out_len, c->out_cap, c->in); } return 0; }
     int rc = 0;
@@ -1337,151 +1513,7 @@ static int bi_osh(cmd_ctx *c) {
     kfree(buf);
     return status;
 }
-static int bi_netstat(cmd_ctx *c) {
-    (void)c;
-    
-    if (!e1000_mmio) {
-        kprintf("Network adapter not initialized\n");
-        return 1;
-    }
-    
-    e1000_print_stats();
-    return 0;
-}
 
-static int bi_ping(cmd_ctx *c) {
-    if (c->argc < 2) {
-        kprintf("Usage: ping <ip>\n");
-        kprintf("Example: ping 192.168.1.1\n");
-        return 1;
-    }
-    
-    if (!e1000_mmio) {
-        kprintf("Network adapter not initialized\n");
-        return 1;
-    }
-    
-    net_ping(c->argv[1]);
-    return 0;
-}
-
-static int bi_https(cmd_ctx *c) {
-    if (c->argc < 2) {
-        kprintf("Usage: https <host> [path]\n");
-        return 1;
-    }
-    if (!e1000_mmio) {
-        kprintf("Network adapter not initialized\n");
-        return 1;
-    }
-    const char* path = (c->argc >= 3) ? c->argv[2] : "/";
-    net_https_get(c->argv[1], path);
-    return 0;
-}
-
-static void print_net_config(void) {
-    const struct net_config* cfg = net_get_config();
-    uint32_t ip = htonl(cfg->ip);
-    uint32_t mask_host = cfg->subnet_mask ? cfg->subnet_mask : parse_ip("255.255.255.0");
-    uint32_t mask = htonl(mask_host);
-    uint32_t gw = htonl(cfg->gateway);
-    uint32_t dns = htonl(cfg->dns);
-    kprintf("Network config:\n");
-    kprintf("  IP: %d.%d.%d.%d\n", (ip>>24)&0xFF, (ip>>16)&0xFF, (ip>>8)&0xFF, ip&0xFF);
-    kprintf("  Mask: %d.%d.%d.%d\n", (mask>>24)&0xFF, (mask>>16)&0xFF, (mask>>8)&0xFF, mask&0xFF);
-    kprintf("  Gateway: %d.%d.%d.%d\n", (gw>>24)&0xFF, (gw>>16)&0xFF, (gw>>8)&0xFF, gw&0xFF);
-    kprintf("  DNS: %d.%d.%d.%d\n", (dns>>24)&0xFF, (dns>>16)&0xFF, (dns>>8)&0xFF, dns&0xFF);
-}
-
-static int run_net_test(void) {
-    if (!e1000_mmio) {
-        kprintf("E1000 not initialized\n");
-        return 1;
-    }
-    kprintf("Network test:\n");
-    uint8_t test_packet[64];
-    memset(test_packet, 0xAA, sizeof(test_packet));
-    if (e1000_send_packet(test_packet, sizeof(test_packet))) {
-        kprintf("TX: OK\n");
-    } else {
-        kprintf("TX: Failed\n");
-    }
-    kprintf("RX: No packets\n");
-    e1000_print_stats();
-    return 0;
-}
-
-static int bi_net(cmd_ctx *c) {
-    if (c->argc == 1 || (c->argc == 2 && strcmp(c->argv[1], "show") == 0)) {
-        print_net_config();
-        e1000_print_stats();
-        return 0;
-    }
-
-    const char* sub = c->argv[1];
-    if ((strcmp(sub, "ip") == 0 || strcmp(sub, "addr") == 0) && c->argc >= 3) {
-        net_set_ip_str(c->argv[2]);
-        print_net_config();
-        return 0;
-    }
-    if ((strcmp(sub, "mask") == 0 || strcmp(sub, "netmask") == 0) && c->argc >= 3) {
-        net_set_subnet_str(c->argv[2]);
-        print_net_config();
-        return 0;
-    }
-    if ((strcmp(sub, "gw") == 0 || strcmp(sub, "gateway") == 0) && c->argc >= 3) {
-        net_set_gateway_str(c->argv[2]);
-        print_net_config();
-        return 0;
-    }
-    if ((strcmp(sub, "dns") == 0) && c->argc >= 3) {
-        net_set_dns_str(c->argv[2]);
-        print_net_config();
-        return 0;
-    }
-    if (strcmp(sub, "test")==0) {
-        return run_net_test();
-    }
-    if (strcmp(sub, "debug") == 0) {
-        net_debug_dump();
-        return 0;
-    }
-
-    kprintf("Usage: net [show]|ip <addr>|mask <mask>|gw <addr>|dns <addr>|test|debug\n");
-    return 1;
-}
-static int bi_net_test(cmd_ctx *c) {
-    (void)c;
-    
-    if (!e1000_mmio) {
-        kprintf("Network adapter not initialized\n");
-        return 1;
-    }
-    
-    kprintf("Network test:\n");
-    
-    // Test transmission
-    uint8_t test_packet[64];
-    memset(test_packet, 0xAA, sizeof(test_packet));
-    
-    if (e1000_send_packet(test_packet, sizeof(test_packet))) {
-        kprintf("  TX: OK\n");
-    } else {
-        kprintf("  TX: FAILED\n");
-    }
-    
-    // Test reception
-    uint8_t rx_buffer[2048];
-    uint16_t rx_length;
-    
-    if (e1000_receive_packet(rx_buffer, &rx_length)) {
-        kprintf("  RX: OK (%d bytes)\n", rx_length);
-    } else {
-        kprintf("  RX: No packets\n");
-    }
-    
-    return 0;
-}
 static int bi_pause(cmd_ctx *c){ (void)c; kprintf("Press any key to continue...\n"); kgetc(); return 0;}
 static int bi_chipset(cmd_ctx *c) {
     if (c->argc < 2) {

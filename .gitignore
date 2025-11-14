@@ -1,0 +1,10 @@
+.vscode/
+.DS_Store
+
+build/*.o
+build/*.asm.o
+iso/boot/axonos.elf
+*.iso
+*.elf
+*.bin
+*.o

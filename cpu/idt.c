@@ -60,6 +60,66 @@ static void ud_fault_handler(cpu_registers_t* regs) {
         for(;;){ asm volatile("sti; hlt":::"memory"); }
 }
 
+static inline uint64_t read_cr2_local(void){ uint64_t v=0; asm volatile("mov %%cr2,%0":"=r"(v)); return v; }
+static inline uint64_t read_cr3_local(void){ uint64_t v=0; asm volatile("mov %%cr3,%0":"=r"(v)); return v; }
+
+static void idt_dump_regs(cpu_registers_t* r, const char* tag) {
+        (void)tag;
+        /* Serial */
+        qemu_debug_printf("[idt] %s: RIP=%016x RSP=%016x RFLAGS=%016x ERR=%016x\n",
+                tag ? tag : "trap",
+                (unsigned long long)r->rip,
+                (unsigned long long)r->rsp,
+                (unsigned long long)r->rflags,
+                (unsigned long long)r->error_code);
+        qemu_debug_printf("[idt] GPR: RAX=%016x RBX=%016x RCX=%016x RDX=%016x\n",
+                (unsigned long long)r->rax, (unsigned long long)r->rbx,
+                (unsigned long long)r->rcx, (unsigned long long)r->rdx);
+        qemu_debug_printf("[idt] GPR: RSI=%016x RDI=%016x RBP=%016x R8 =%016x\n",
+                (unsigned long long)r->rsi, (unsigned long long)r->rdi,
+                (unsigned long long)r->rbp, (unsigned long long)r->r8);
+        qemu_debug_printf("[idt] GPR: R9 =%016x R10=%016x R11=%016x R12=%016x\n",
+                (unsigned long long)r->r9, (unsigned long long)r->r10,
+                (unsigned long long)r->r11, (unsigned long long)r->r12);
+        qemu_debug_printf("[idt] GPR: R13=%016x R14=%016x R15=%016x CS =%016x SS =%016x\n",
+                (unsigned long long)r->r13, (unsigned long long)r->r14,
+                (unsigned long long)r->r15, (unsigned long long)r->cs, (unsigned long long)r->ss);
+        uint64_t cr2 = read_cr2_local();
+        uint64_t cr3 = read_cr3_local();
+        qemu_debug_printf("[idt] CR2=%016x CR3=%016x\n",
+                (unsigned long long)cr2, (unsigned long long)cr3);
+        /* Stack dump (first 8 qwords) */
+        qemu_debug_printf("[idt] stack @RSP:\n");
+        uint64_t* sp = (uint64_t*)(uintptr_t)r->rsp;
+        for (int i = 0; i < 8; i++) {
+                uint64_t v = 0;
+                /* best-effort read */
+                v = sp ? sp[i] : 0;
+                qemu_debug_printf("  +%02d: %016x\n", i*8, (unsigned long long)v);
+        }
+        /* Screen (short summary) */
+        kprintf("<(0c)>INT: %s RIP=%016x ERR=%016x\n",
+                tag ? tag : "trap",
+                (unsigned long long)r->rip,
+                (unsigned long long)r->error_code);
+	kprintf("<(0c)>RSP=%016x CR2=%016x CR3=%016x\n",
+		(unsigned long long)r->rsp,
+		(unsigned long long)cr2,
+		(unsigned long long)cr3);
+	kprintf("<(0c)>RAX=%016x RBX=%016x RCX=%016x RDX=%016x\n",
+		(unsigned long long)r->rax, (unsigned long long)r->rbx,
+		(unsigned long long)r->rcx, (unsigned long long)r->rdx);
+	kprintf("<(0c)>RSI=%016x RDI=%016x RBP=%016x\n",
+		(unsigned long long)r->rsi, (unsigned long long)r->rdi,
+		(unsigned long long)r->rbp);
+	/* Short stack preview on screen (4 qwords) */
+	uint64_t* sp_scr = (uint64_t*)(uintptr_t)r->rsp;
+	for (int i = 0; i < 4; i++) {
+		uint64_t v = sp_scr ? sp_scr[i] : 0;
+		kprintf("<(0c)>[SP+%02d]=%016x\n", i*8, (unsigned long long)v);
+	}
+}
+
 // Handle Divide-by-zero (INT 0). For user faults: kill process and return to idle;
 // for kernel faults: print diagnostics and halt.
 static void div_zero_handler(cpu_registers_t* regs) {
@@ -86,7 +146,7 @@ static void gp_fault_handler(cpu_registers_t* regs){
         // Строгая семантика для POSIX-подобного поведения: никаких эмуляций в ring3.
         // General Protection Fault в пользовательском процессе рассматривается как фатальная ошибка процесса.
         if ((regs->cs & 3) == 3) {
-                kprintf("<(0c)>\nUser General Protection Fault.\nRIP: %016x\nCODE: %u\nFLAGS: %x\n", regs->rip, regs->error_code, regs->rflags);
+                idt_dump_regs(regs, "general protection fault");
                 asm volatile("sti; hlt" ::: "memory");
                 (void)regs;
         }
@@ -102,7 +162,16 @@ static void df_fault_handler(cpu_registers_t* regs){
         for(;;){ asm volatile("sti; hlt" ::: "memory"); }
 }
 
+/* Simple ISR stack canary diagnostics */
+static volatile uint64_t g_last_isr_canary_addr = 0;
+static volatile uint64_t g_last_isr_canary_val  = 0;
+static volatile int      g_last_isr_canary_bad  = 0;
+
 void isr_dispatch(cpu_registers_t* regs) {
+        /* Place a canary on the current ISR stack frame */
+        volatile uint64_t canary = 0xA5A5DEADBEEFC0DEULL;
+        g_last_isr_canary_addr = (uint64_t)(uintptr_t)&canary;
+        g_last_isr_canary_val  = canary;
         uint8_t vec = (uint8_t)regs->interrupt_number;
 
         // Если пришёл IRQ1 (клавиатура) — гарантируем EOI даже при отсутствии обработчика
@@ -133,15 +202,24 @@ void isr_dispatch(cpu_registers_t* regs) {
         
         // Exceptions 0..31 without specific handler: print and halt
         if (vec < 32) {
-                for (;;);
+                idt_dump_regs(regs, "exception");
+                for (;;){ asm volatile("sti; hlt" ::: "memory"); }
         }
         
         // Unknown vector
         qemu_debug_printf("Unknown interrupt %d (0x%x)\n", vec, vec);
-        qemu_debug_printf("RIP: 0x%x, RSP: 0x%x\n", regs->rip, regs->rsp);
-        for (;;);
+        idt_dump_regs(regs, "unknown");
+        for (;;){ asm volatile("sti; hlt" ::: "memory"); }
         // no swap in VGA text mode
-        for (;;);
+        for (;;){ asm volatile("sti; hlt" ::: "memory"); }
+
+        /* Canary check (not reached in fatal paths above) */
+        if (canary != 0xA5A5DEADBEEFC0DEULL) {
+                g_last_isr_canary_bad = 1;
+                qemu_debug_printf("[idt] ISR stack canary CORRUPTED at %016x\n",
+                        (unsigned long long)g_last_isr_canary_addr);
+                kprintf("<(0c)>ISR stack canary CORRUPTED\n");
+        }
 }
 
 void idt_set_gate(uint8_t num, uint64_t handler, uint16_t selector, uint8_t flags) {

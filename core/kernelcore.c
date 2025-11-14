@@ -24,6 +24,10 @@
 #include <editor.h>
 #include <intel_chipset.h>
 #include <mmio.h>
+#include <e1000.h>
+#include <net.h>
+#include <tls.h>
+#include <net_lwip.h>
 
 int exit = 0;
 
@@ -208,13 +212,34 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {
     /* Регистрируем файловую систему */
     ramfs_register();
     ext2_register();
-    e1000_init();
     
     ps2_keyboard_init();
     //idt_set_handler(33, kb_null);
     rtc_init();
     
     asm volatile("sti");
+
+    /* Initialize Intel E1000 NIC (if present) */
+    if (e1000_init() == 0) {
+        uint8_t mac[6];
+        if (e1000_get_mac(mac) == 0) {
+            kprintf("e1000: MAC %02x:%02x:%02x:%02x:%02x:%02x\n",
+                mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+        }
+        /* Bring up minimal L2/L3 and try ping to host (configure tap0 accordingly) */
+        uint32_t my_ip = ip4_addr(10,0,2,15);
+		uint32_t gw_ip = ip4_addr(10,0,2,2);
+        net_init(my_ip, gw_ip);
+		/* Re-enable lwIP stack (NO_SYS) with static /24 */
+		lwip_stack_init(my_ip, ip4_addr(255,255,255,0), gw_ip);
+        /* HTTPS (stub/proxy or real TLS): получить страницу и сохранить тело в ramfs */
+        /* Stream directly to file with soft-wrap at 78 cols (faster, no big buffers) */
+		kprintf("https: start github.com /\n");
+		int tr = https_get_to_file("github.com", "/", "/test", 8000, 78);
+		kprintf("https: done rc=%d -> /test\n", tr);
+    } else {
+        kprintf("e1000: init failed or NIC not found\n");
+    }
 
     static const char license_text[] =
 "MIT License\n"
